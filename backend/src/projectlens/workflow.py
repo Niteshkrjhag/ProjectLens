@@ -176,7 +176,17 @@ class ProjectLensWorkflow:
         documents, claims = self._effective_inputs(run)
         conflicts = self.storage.list_conflicts(run["id"])
         base = self.storage.latest_deliverable(run["project_id"]) if run["mode"] == "incremental" else None
-        affected = {claim["claim_key"] for claim in self.storage.list_claims(run["id"])} if run["mode"] == "incremental" else None
+        affected: set[str] | None = None
+        if run["mode"] == "incremental":
+            current_claims = self.storage.list_claims(run["id"])
+            base_claims = self.storage.list_claims(run["base_run_id"]) if run.get("base_run_id") else []
+            base_values: dict[str, set[str]] = {}
+            for claim in base_claims:
+                base_values.setdefault(claim["claim_key"], set()).add(claim["value"].casefold().strip())
+            affected = {
+                claim["claim_key"] for claim in current_claims
+                if claim["value"].casefold().strip() not in base_values.get(claim["claim_key"], set())
+            }
         content = build_deliverable(claims, documents, conflicts, base_content=base.get("content") if base else None, affected_keys=affected)
         self.storage.save_deliverable(run["project_id"], run["id"], content, status="draft")
         preserved = sorted(set((base or {}).get("content", {}).get("sections", {})) - (affected or set())) if base else []
