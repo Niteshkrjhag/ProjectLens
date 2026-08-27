@@ -68,8 +68,16 @@ def reject_review_item(run_id: str, item_id: str, decided_by: str = "machine", n
 
 @server.tool(description="Ask a grounded question against the latest committed deliverable.")
 def ask(project_id: str, question: str) -> dict[str, Any]:
-    deliverable = get_storage().latest_deliverable(project_id)
-    return answer_question(question, deliverable.get("content") if deliverable else None)
+    storage = get_storage()
+    deliverable = storage.latest_deliverable(project_id)
+    latest_run = storage.latest_run(project_id)
+    claims = storage.list_claims(latest_run["id"]) if latest_run else []
+    return answer_question(
+        question,
+        deliverable.get("content") if deliverable else None,
+        documents=storage.list_documents(project_id),
+        claims=claims,
+    )
 
 
 if __name__ == "__main__":

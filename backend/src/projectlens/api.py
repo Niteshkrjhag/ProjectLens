@@ -254,8 +254,16 @@ def get_deliverable(project_id: str) -> dict[str, Any]:
 @app.post("/projects/{project_id}/ask")
 def ask_project(project_id: str, request: QuestionRequest) -> dict[str, Any]:
     _project_or_404(project_id)
-    deliverable = get_storage().latest_deliverable(project_id)
-    return answer_question(request.question, deliverable.get("content") if deliverable else None)
+    storage = get_storage()
+    deliverable = storage.latest_deliverable(project_id)
+    latest_run = storage.latest_run(project_id)
+    claims = storage.list_claims(latest_run["id"]) if latest_run else []
+    return answer_question(
+        request.question,
+        deliverable.get("content") if deliverable else None,
+        documents=storage.list_documents(project_id),
+        claims=claims,
+    )
 
 
 @app.post("/projects/{project_id}/watch/scan", status_code=202)

@@ -259,18 +259,38 @@ def examine(
     return findings
 
 
-def answer_question(question: str, deliverable: dict[str, Any] | None) -> dict[str, Any]:
-    """Answer only from the committed deliverable, with explicit unknowns."""
+ANSWER_STOP_WORDS = {
+    "the", "and", "for", "with", "what", "who", "where", "when", "why", "how", "does", "is", "are", "was", "were",
+    "can", "could", "would", "should", "tell", "more", "about", "please", "me", "you", "this", "that", "file", "source",
+    "document", "notes", "note", "report", "md", "txt", "pdf", "docx",
+}
+
+
+def _question_tokens(question: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]{3,}", question.casefold()) if token not in ANSWER_STOP_WORDS}
+
+
+def _citation(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": entry["source"],
+        "line_start": entry["line_start"],
+        "line_end": entry["line_end"],
+        "quote": entry["quote"],
+    }
+
+
+def _answer_from_deliverable(question: str, deliverable: dict[str, Any] | None) -> dict[str, Any]:
+    """Find a grounded answer in a report, without resolving conflicts silently."""
     if not deliverable:
         return {"answer": "I do not have a committed deliverable to answer from.", "citations": [], "grounded": False}
-    stop_words = {"the", "and", "for", "with", "what", "who", "where", "when", "why", "how", "does", "is", "are", "was", "were", "can", "could", "would", "should"}
-    tokens = {token for token in re.findall(r"[a-z0-9]{3,}", question.casefold()) if token not in stop_words}
+    tokens = _question_tokens(question)
     matches: list[tuple[int, str, dict[str, Any]]] = []
     for key, section in deliverable.get("sections", {}).items():
         haystack = f"{key} {section.get('label', '')}".casefold()
         label_tokens = set(re.findall(r"[a-z0-9]{3,}", haystack))
         for entry in section.get("entries", []):
-            score = len(tokens & set(re.findall(r"[a-z0-9]{3,}", f"{haystack} {entry.get('value','')}".casefold())))
+            entry_tokens = set(re.findall(r"[a-z0-9]{3,}", f"{haystack} {entry.get('value', '')}".casefold()))
+            score = len(tokens & entry_tokens)
             label_score = len(tokens & label_tokens)
             if score and (label_score or score >= 2):
                 matches.append((score, key, entry))
@@ -278,9 +298,97 @@ def answer_question(question: str, deliverable: dict[str, Any] | None) -> dict[s
         return {"answer": "I cannot find support for that in the committed sources.", "citations": [], "grounded": False}
     matches.sort(key=lambda item: item[0], reverse=True)
     top = matches[:3]
-    citations = [
-        {"source": entry["source"], "line_start": entry["line_start"], "line_end": entry["line_end"], "quote": entry["quote"]}
-        for _, _, entry in top
+    return {
+        "answer": "; ".join(f"{key.replace('_', ' ').title()}: {entry['value']}" for _, key, entry in top),
+        "citations": [_citation(entry) for _, _, entry in top],
+        "grounded": True,
+    }
+
+
+def _document_type(document: dict[str, Any]) -> str:
+    for line in document.get("content", "").splitlines():
+        if line.casefold().startswith("document type:"):
+            return line.split(":", 1)[1].strip()
+    return document.get("category", "source").replace("_", " ").title()
+
+
+def _answer_from_document(question: str, documents: list[dict[str, Any]], claims: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Answer a filename/source question directly from parsed source lines."""
+    question_lower = question.casefold()
+    file_hint = any(marker in question_lower for marker in ("file", "source", "document", ".md", ".txt", ".pdf", ".docx"))
+    if not file_hint:
+        return None
+    tokens = _question_tokens(question)
+    if not tokens:
+        return None
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for document in documents:
+        path_tokens = set(re.findall(r"[a-z0-9]{3,}", document.get("relative_path", "").casefold()))
+        name_tokens = set(re.findall(r"[a-z0-9]{3,}", document.get("filename", "").casefold()))
+        score = len(tokens & (path_tokens | name_tokens))
+        if score:
+            candidates.append((score, document))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    document = candidates[0][1]
+    document_claims = [claim for claim in claims if claim.get("document_id") == document.get("id")]
+    if not document_claims:
+        document_claims = extract_claims(document)
+    useful_claims = [
+        claim for claim in sorted(document_claims, key=lambda item: item["line_start"])
+        if claim["claim_key"] not in {"status_signal", "operational_anomaly"}
+    ][:4]
+    lines = document.get("content", "").splitlines()
+    summary_lines = [
+        (line_number, line.strip())
+        for line_number, line in enumerate(lines, start=1)
+        if len(line.strip()) >= 45 and ":" not in line.strip() and not line.lstrip().startswith("#")
     ]
-    answer = "; ".join(f"{key.replace('_', ' ').title()}: {entry['value']}" for _, key, entry in top)
-    return {"answer": answer, "citations": citations, "grounded": True}
+    citations = [
+        {"source": document["relative_path"], "line_start": claim["line_start"], "line_end": claim["line_end"], "quote": claim["evidence_text"]}
+        for claim in useful_claims
+    ]
+    facts = ", ".join(f"{claim['label']}: {claim['value']}" for claim in useful_claims[:3])
+    answer = f"{document['filename']} is a {_document_type(document)} source."
+    if facts:
+        answer += f" Its grounded facts are {facts}."
+    if summary_lines:
+        line_number, summary = summary_lines[0]
+        answer += f" It also records: {summary}"
+        citations.append({"source": document["relative_path"], "line_start": line_number, "line_end": line_number, "quote": summary})
+    return {"answer": answer, "citations": citations[:5], "grounded": True, "source_preview": True}
+
+
+def answer_question(
+    question: str,
+    deliverable: dict[str, Any] | None,
+    *,
+    documents: list[dict[str, Any]] | None = None,
+    claims: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Answer from committed work first, then from current source evidence.
+
+    A source preview is explicitly marked as uncommitted so users can ask about
+    newly uploaded files while the human gate is still open without confusing
+    that preview with the committed deliverable.
+    """
+    source_documents = documents or []
+    source_claims = list(claims or [])
+    if source_documents:
+        document_answer = _answer_from_document(question, source_documents, source_claims)
+        if document_answer:
+            return document_answer
+
+        known_document_ids = {claim.get("document_id") for claim in source_claims}
+        for document in source_documents:
+            if document.get("id") not in known_document_ids:
+                source_claims.extend(extract_claims(document))
+        source_deliverable = build_deliverable(source_claims, source_documents, reconcile(source_claims, source_documents)) if source_claims else None
+        source_answer = _answer_from_deliverable(question, source_deliverable)
+        if source_answer["grounded"]:
+            source_answer["answer"] = f"Source-grounded preview (not yet committed): {source_answer['answer']}"
+            source_answer["source_preview"] = True
+            return source_answer
+
+    return _answer_from_deliverable(question, deliverable)

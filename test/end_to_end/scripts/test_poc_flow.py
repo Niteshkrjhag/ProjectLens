@@ -149,6 +149,78 @@ def test_grounded_answer_refuses_unsupported_claim(tmp_path: Path) -> None:
     assert "cannot find support" in answer["answer"].casefold()
 
 
+def test_source_question_answers_uncommitted_file_with_line_citations(tmp_path: Path) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    (source_root / "leadership-notes.md").write_text(
+        "# Leadership checkpoint\n\n"
+        "Document type: Meeting Notes\n"
+        "Owner: Lena Ortiz\n"
+        "Workstream: Atlas migration\n"
+        "Decision date: 2026-08-28\n\n"
+        "Leadership asked for a concise readiness brief, visible conflicts, and a named owner for each unresolved dependency.\n",
+        encoding="utf-8",
+    )
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("Uncommitted source question")
+    run = store.create_run(project["id"], source_path=str(source_root))
+    workflow.execute(run["id"])
+
+    answer = answer_question(
+        "Can you tell me about leadership notes.md file?",
+        None,
+        documents=store.list_documents(project["id"]),
+        claims=store.list_claims(run["id"]),
+    )
+
+    assert answer["grounded"] is True
+    assert answer["source_preview"] is True
+    assert "Lena Ortiz" in answer["answer"]
+    assert "readiness brief" in answer["answer"]
+    assert any(citation["line_start"] == 4 for citation in answer["citations"])
+
+
+def test_fastapi_ask_answers_uncommitted_source_question(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROJECTLENS_STORAGE_URL", f"sqlite:///{tmp_path / 'source-question.db'}")
+    from projectlens.api import app, get_storage, get_workflow
+
+    get_workflow.cache_clear()
+    get_storage.cache_clear()
+    try:
+        with TestClient(app) as client:
+            project = client.post("/projects", json={"name": "HTTP source question"}).json()
+            content = (
+                "# Leadership checkpoint\n\n"
+                "Document type: Meeting Notes\n"
+                "Owner: Lena Ortiz\n"
+                "Workstream: Atlas migration\n"
+                "Decision date: 2026-08-28\n\n"
+                "Leadership asked for a concise readiness brief and visible conflicts.\n"
+            ).encode()
+            document = client.post(
+                f"/projects/{project['id']}/documents",
+                files={"file": ("leadership-notes.md", content, "text/markdown")},
+            ).json()
+            run = client.post(
+                f"/projects/{project['id']}/runs",
+                json={"source_ids": [document["id"]], "background": False},
+            ).json()
+            assert run["status"] == "awaiting_review"
+            answer = client.post(
+                f"/projects/{project['id']}/ask",
+                json={"question": "Can you tell me about leadership notes.md file?"},
+            ).json()
+
+        assert answer["grounded"] is True
+        assert answer["source_preview"] is True
+        assert "Lena Ortiz" in answer["answer"]
+        assert answer["citations"]
+    finally:
+        get_workflow.cache_clear()
+        get_storage.cache_clear()
+
+
 def test_mcp_registers_machine_drivable_tools() -> None:
     async def names() -> list[str]:
         return [tool.name for tool in await server.list_tools()]
