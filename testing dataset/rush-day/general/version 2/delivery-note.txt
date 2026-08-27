@@ -1,0 +1,22 @@
+production outage response — Normal operating case — version 2
+Fixture: rush-day/general/version 2
+Date: 2026-08-17
+Document type: Sprint / Project Status Report
+Owner: Priya Raman
+
+Current position
+A status check on 2026-08-17 reports 68% completion, one dependency at risk, and no scope change. The delivery owner is Priya Raman.
+
+Work completed
+- Test fixture and rollback check are complete.
+- The team linked the work to the approved requirement.
+- A reviewer was assigned for the next checkpoint.
+
+Open dependency
+the managed certificate provider remains the only dependency worth tracking. The status report does not authorize changing the requirements or architecture.
+
+Operational note
+The status should be appended to the project timeline. If a new document contradicts this report, show both sources and request a human decision.
+
+Source integrity: synthetic fixture with no confidential data.
+

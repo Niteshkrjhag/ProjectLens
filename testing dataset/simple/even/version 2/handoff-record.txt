@@ -1,0 +1,30 @@
+# CSV importer retirement — Edge / boundary case — version 2
+
+Fixture path: simple/even/version 2  
+Captured: 2026-08-17  
+Domain: Atlas migration portfolio  
+Document type: Change record / review evidence  
+Owner: Maya Chen
+
+## Situation
+
+The handoff was recorded at 23:58 UTC on 2026-08-17, just before the 2026-09-07 window. Time zone and document timestamps must remain explicit.
+
+## Relevant facts
+
+- Workstream: CSV importer retirement
+- Delivery window: 2026-09-07
+- Expected measure: under 90 seconds for a 25 MB import
+- Dependency: the vendor's nightly export
+- Commercial context: $18,000
+
+## Analyst handling
+
+Extract facts, preserve source locations, and compare this record with the requirements, architecture, status, and rules sources. Do not promote this supporting evidence above a required document.
+
+## Gate outcome
+
+This fixture is intentionally not a final approval. The system should produce a review item with approve/reject controls and show what remains unchanged after the decision.
+
+Source integrity: synthetic fixture with no confidential data.
+

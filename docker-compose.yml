@@ -1,0 +1,23 @@
+services:
+  # Optional local fallback. Supabase is the default database when DATABASE_URL
+  # points at your Supabase pooler or direct Postgres connection.
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: projectlens-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: projectlens
+      POSTGRES_USER: projectlens
+      POSTGRES_PASSWORD: projectlens
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projectlens -d projectlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

@@ -1,0 +1,30 @@
+# production outage response — Edge / boundary case — version 2
+
+Fixture path: rush-day/even/version 2  
+Captured: 2026-08-17  
+Domain: Atlas migration portfolio  
+Document type: Change record / review evidence  
+Owner: Priya Raman
+
+## Situation
+
+The handoff was recorded at 23:58 UTC on 2026-08-17, just before the 2026-08-28 window. Time zone and document timestamps must remain explicit.
+
+## Relevant facts
+
+- Workstream: production outage response
+- Delivery window: 2026-08-28
+- Expected measure: restore previews and establish a verified rollback within 60 minutes
+- Dependency: the managed certificate provider
+- Commercial context: incident
+
+## Analyst handling
+
+Extract facts, preserve source locations, and compare this record with the requirements, architecture, status, and rules sources. Do not promote this supporting evidence above a required document.
+
+## Gate outcome
+
+This fixture is intentionally not a final approval. The system should produce a review item with approve/reject controls and show what remains unchanged after the decision.
+
+Source integrity: synthetic fixture with no confidential data.
+

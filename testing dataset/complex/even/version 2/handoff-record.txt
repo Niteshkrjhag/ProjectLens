@@ -1,0 +1,30 @@
+# identity migration — Edge / boundary case — version 2
+
+Fixture path: complex/even/version 2  
+Captured: 2026-08-17  
+Domain: Atlas migration portfolio  
+Document type: Change record / review evidence  
+Owner: Leila Okafor
+
+## Situation
+
+The handoff was recorded at 23:58 UTC on 2026-08-17, just before the 2026-10-30 window. Time zone and document timestamps must remain explicit.
+
+## Relevant facts
+
+- Workstream: identity migration
+- Delivery window: 2026-10-30
+- Expected measure: zero lost accounts and fewer than 0.2% recovery escalations
+- Dependency: regional data residency approval
+- Commercial context: $420,000
+
+## Analyst handling
+
+Extract facts, preserve source locations, and compare this record with the requirements, architecture, status, and rules sources. Do not promote this supporting evidence above a required document.
+
+## Gate outcome
+
+This fixture is intentionally not a final approval. The system should produce a review item with approve/reject controls and show what remains unchanged after the decision.
+
+Source integrity: synthetic fixture with no confidential data.
+
