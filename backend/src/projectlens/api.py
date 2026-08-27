@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import os
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -13,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .analysis import answer_question
+from .config import get_settings
 from .document_policy import DocumentCategory
 from .document_processing import parse_bytes
 from .storage import Storage
@@ -21,7 +23,13 @@ from .workflow import ProjectLensWorkflow
 
 @lru_cache(maxsize=1)
 def get_storage() -> Storage:
-    return Storage()
+    configured = os.getenv("PROJECTLENS_STORAGE_URL")
+    if not configured:
+        try:
+            configured = get_settings().database_url
+        except Exception:
+            configured = ""
+    return Storage(url=configured or None)
 
 
 @lru_cache(maxsize=1)
@@ -118,7 +126,7 @@ def _run_payload(run_id: str) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, Any]:
     storage = get_storage()
-    return {"ok": True, "service": "projectlens", "storage": "sqlite", "database": str(storage.path)}
+    return {"ok": True, "service": "projectlens", "storage": storage.backend, "database": str(storage.path)}
 
 
 @app.get("/projects")

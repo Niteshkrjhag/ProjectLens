@@ -1,11 +1,10 @@
 """Durable storage for the offline-first ProjectLens proof of concept.
 
 The POC uses SQLite by default so a fresh clone can exercise the entire flow
-without a database account.  The schema is intentionally relational and keeps
-the storage boundary small; it can be moved to Supabase/PostgreSQL without
-changing the workflow contract.  A PostgreSQL adapter is added in the next
-milestone, while the existing :mod:`projectlens.database` module remains the
-connection helper for Supabase deployments.
+without a database account.  The same repository contract also accepts a
+Supabase/PostgreSQL URL and provisions the relational schema plus a pgvector
+chunk table.  Retrieval remains deterministic lexical matching in this POC so
+offline tests do not require embedding spend.
 """
 
 from __future__ import annotations
@@ -19,6 +18,9 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
+
+import psycopg
+from psycopg.rows import dict_row
 
 
 SCHEMA = """
@@ -167,6 +169,21 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id, id);
 """
 
 
+POSTGRES_SCHEMA = SCHEMA.replace("PRAGMA foreign_keys = ON;", "").replace("PRAGMA journal_mode = WAL;", "").replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY") + """
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding vector(1536),
+    UNIQUE(document_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding ON document_chunks USING hnsw (embedding vector_cosine_ops);
+"""
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -188,16 +205,69 @@ def decode_json(value: str | None, default: Any) -> Any:
         return default
 
 
+class _PostgresConnection:
+    """Tiny compatibility wrapper for the SQL used by the repository."""
+
+    def __init__(self, url: str) -> None:
+        self._connection = psycopg.connect(url, row_factory=dict_row)
+
+    @staticmethod
+    def _translate(sql: str) -> str:
+        sql = sql.replace("INSERT OR IGNORE", "INSERT")
+        if sql.lstrip().upper().startswith("INSERT "):
+            sql = f"{sql} ON CONFLICT DO NOTHING"
+        return sql.replace("?", "%s")
+
+    def execute(self, sql: str, params: Any = ()):
+        if sql.lstrip().upper().startswith("PRAGMA"):
+            return _NoopCursor()
+        return self._connection.execute(self._translate(sql), params)
+
+    def executemany(self, sql: str, params: Any):
+        return self._connection.executemany(self._translate(sql), params)
+
+    def executescript(self, script: str) -> None:
+        for statement in script.split(";"):
+            if statement.strip():
+                self._connection.execute(statement)
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+class _NoopCursor:
+    def fetchone(self):
+        return None
+
+
+def _first_value(row: Any) -> Any:
+    if isinstance(row, dict):
+        return next(iter(row.values()))
+    return row[0]
+
+
 class Storage:
     """Small transactional repository used by the workflow and API."""
 
     def __init__(self, url: str | None = None, data_dir: str | Path = "data") -> None:
         configured = url or os.getenv("PROJECTLENS_STORAGE_URL", "")
+        self.backend = "postgres" if configured.startswith(("postgresql://", "postgres://")) else "sqlite"
+        self.url = configured
+        if self.backend == "postgres":
+            self.path = Path("supabase://projectlens")
+            self._lock = threading.RLock()
+            self.initialize()
+            return
         if configured and not configured.startswith("sqlite://"):
             raise ValueError(
-                "The POC storage adapter currently supports sqlite:// only. "
-                "Set PROJECTLENS_STORAGE_URL=sqlite:///./data/projectlens.db for an "
-                "offline run; Supabase/PostgreSQL wiring remains the deployment adapter."
+                "Storage expects sqlite:///... or a postgresql:// URL. "
+                "Set PROJECTLENS_STORAGE_URL=sqlite:///./data/projectlens.db for an offline run."
             )
         if configured.startswith("sqlite:///"):
             raw_path = configured.removeprefix("sqlite:///")
@@ -211,12 +281,15 @@ class Storage:
         self.initialize()
 
     @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
+    def connection(self) -> Iterator[Any]:
         with self._lock:
-            connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 30000")
+            if self.backend == "postgres":
+                connection = _PostgresConnection(self.url)
+            else:
+                connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute("PRAGMA busy_timeout = 30000")
             try:
                 yield connection
                 connection.commit()
@@ -228,8 +301,11 @@ class Storage:
 
     def initialize(self) -> None:
         with self.connection() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(SCHEMA)
+            if self.backend == "sqlite":
+                connection.execute("PRAGMA journal_mode = WAL")
+                connection.executescript(SCHEMA)
+            else:
+                connection.executescript(POSTGRES_SCHEMA)
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -411,7 +487,7 @@ class Storage:
 
     def list_stages(self, run_id: str) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = [dict(row) for row in connection.execute("SELECT * FROM run_stages WHERE run_id=? ORDER BY rowid", (run_id,))]
+            rows = [dict(row) for row in connection.execute("SELECT * FROM run_stages WHERE run_id=? ORDER BY started_at, stage_name", (run_id,))]
         for row in rows:
             row["detail"] = decode_json(row.pop("detail_json", None), {})
         return rows
@@ -529,7 +605,7 @@ class Storage:
             if row:
                 connection.execute("UPDATE deliverables SET content_json=?,content_hash=?,status=? WHERE run_id=?", (payload, content_hash, status, run_id))
             else:
-                next_version = connection.execute("SELECT COALESCE(MAX(version),0)+1 FROM deliverables WHERE project_id=?", (project_id,)).fetchone()[0]
+                next_version = _first_value(connection.execute("SELECT COALESCE(MAX(version),0)+1 AS next_version FROM deliverables WHERE project_id=?", (project_id,)).fetchone())
                 connection.execute(
                     "INSERT INTO deliverables(id,project_id,run_id,version,status,content_json,content_hash,created_at,committed_at) VALUES (?,?,?,?,?,?,?,?,?)",
                     (new_id("del"), project_id, run_id, next_version, status, payload, content_hash, utc_now(), utc_now() if status == "committed" else None),
@@ -572,7 +648,7 @@ class Storage:
     def recover_incomplete_runs(self) -> list[str]:
         """Make a process restart safe by re-queuing interrupted runs."""
         with self.connection() as connection:
-            rows = [row[0] for row in connection.execute("SELECT id FROM runs WHERE status IN ('running','paused')")]
+            rows = [_first_value(row) for row in connection.execute("SELECT id FROM runs WHERE status IN ('running','paused')")]
             if rows:
                 connection.executemany("UPDATE runs SET status='queued',stop_requested=0,updated_at=? WHERE id=?", [(utc_now(), run_id) for run_id in rows])
                 connection.execute("UPDATE run_stages SET status='pending',started_at=NULL WHERE status='running'")
