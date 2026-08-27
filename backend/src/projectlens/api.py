@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -72,7 +73,16 @@ class RunManager:
 
 
 manager = RunManager()
-app = FastAPI(title="ProjectLens POC API", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    for run_id in get_storage().recover_incomplete_runs():
+        manager.submit(run_id)
+    yield
+
+
+app = FastAPI(title="ProjectLens POC API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -103,12 +113,6 @@ def _run_payload(run_id: str) -> dict[str, Any]:
         "deliverable": get_storage().get_deliverable(run_id),
         "events": get_storage().list_events(run_id),
     }
-
-
-@app.on_event("startup")
-def recover_runs() -> None:
-    for run_id in get_storage().recover_incomplete_runs():
-        manager.submit(run_id)
 
 
 @app.get("/health")

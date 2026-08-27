@@ -263,13 +263,16 @@ def answer_question(question: str, deliverable: dict[str, Any] | None) -> dict[s
     """Answer only from the committed deliverable, with explicit unknowns."""
     if not deliverable:
         return {"answer": "I do not have a committed deliverable to answer from.", "citations": [], "grounded": False}
-    tokens = {token for token in re.findall(r"[a-z0-9]{3,}", question.casefold())}
+    stop_words = {"the", "and", "for", "with", "what", "who", "where", "when", "why", "how", "does", "is", "are", "was", "were", "can", "could", "would", "should"}
+    tokens = {token for token in re.findall(r"[a-z0-9]{3,}", question.casefold()) if token not in stop_words}
     matches: list[tuple[int, str, dict[str, Any]]] = []
     for key, section in deliverable.get("sections", {}).items():
         haystack = f"{key} {section.get('label', '')}".casefold()
+        label_tokens = set(re.findall(r"[a-z0-9]{3,}", haystack))
         for entry in section.get("entries", []):
             score = len(tokens & set(re.findall(r"[a-z0-9]{3,}", f"{haystack} {entry.get('value','')}".casefold())))
-            if score:
+            label_score = len(tokens & label_tokens)
+            if score and (label_score or score >= 2):
                 matches.append((score, key, entry))
     if not matches:
         return {"answer": "I cannot find support for that in the committed sources.", "citations": [], "grounded": False}

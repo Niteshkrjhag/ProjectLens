@@ -265,13 +265,10 @@ class Storage:
         return self.get_project(project_id)
 
     def upsert_document(self, project_id: str, document: dict[str, Any]) -> dict[str, Any]:
-        existing = self.get_document_by_hash(project_id, document["sha256"])
-        if existing:
-            return existing
         document_id = new_id("doc")
         with self.connection() as connection:
             connection.execute(
-                """INSERT INTO documents
+                """INSERT OR IGNORE INTO documents
                 (id,project_id,filename,relative_path,content_type,content,sha256,size_bytes,
                  category,authoritative,updated_at,metadata_json)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -290,7 +287,10 @@ class Storage:
                     _json(document.get("metadata", {})),
                 ),
             )
-        return self.get_document(document_id)  # type: ignore[return-value]
+        inserted = self.get_document(document_id)
+        if inserted:
+            return inserted
+        return self.get_document_by_hash(project_id, document["sha256"])  # type: ignore[return-value]
 
     def get_document(self, document_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:

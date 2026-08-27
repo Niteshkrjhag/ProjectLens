@@ -10,7 +10,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import BinaryIO
 
-import fitz
+import pymupdf
 from docx import Document as DocxDocument
 
 from .document_policy import DocumentCategory, classify_document
@@ -82,7 +82,7 @@ def parse_bytes(filename: str, raw: bytes, *, relative_path: str | None = None, 
         metadata: dict[str, object] = {}
     elif suffix == ".pdf":
         pages: list[str] = []
-        with fitz.open(stream=raw, filetype="pdf") as pdf:
+        with pymupdf.open(stream=raw, filetype="pdf") as pdf:
             for page_number, page in enumerate(pdf, start=1):
                 pages.append(f"[Page {page_number}]\n{page.get_text()}")
         content = "\n\n".join(pages)
