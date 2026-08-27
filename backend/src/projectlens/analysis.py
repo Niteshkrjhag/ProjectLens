@@ -92,7 +92,8 @@ def extract_claims(document: dict[str, Any]) -> list[dict[str, Any]]:
         for pattern, key, label in patterns:
             match = re.search(pattern, line, re.IGNORECASE)
             if match:
-                _add(claims, document, key, label, match.group(1), line_number, confidence=0.92)
+                value = match.group(1) if match.lastindex else match.group(0)
+                _add(claims, document, key, label, value, line_number, confidence=0.92)
 
         if re.search(r"failed handoff|missing attachment|unresolved", line, re.IGNORECASE):
             _add(claims, document, "operational_anomaly", "Operational anomaly", line, line_number, confidence=0.95)

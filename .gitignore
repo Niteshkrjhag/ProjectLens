@@ -9,5 +9,6 @@ node_modules/
 dist/
 build/
 *.egg-info/
+data/
 .DS_Store
 AGENTS.md

@@ -59,6 +59,10 @@ class ProjectLensWorkflow:
         run = self.storage.get_run(run_id)
         if not run:
             raise KeyError(f"unknown run: {run_id}")
+        if run.get("stop_requested"):
+            self.storage.update_run(run_id, status="paused", stop_requested=0)
+            self.storage.add_event(run_id, "run_paused", f"Run paused before {stage}", {})
+            return {"run_id": run_id, "halt": True}
         started = time.perf_counter()
         self.storage.update_run(run_id, status="running", error=None)
         self.storage.add_event(run_id, "run_started", "Workflow started or resumed", {"stop_after_stage": stop_after_stage})
@@ -115,6 +119,7 @@ class ProjectLensWorkflow:
             root = Path(run["source_path"]).expanduser().resolve()
             for path in discover_files(root):
                 parsed = parse_file(path, root)
+                existing = self.storage.get_document_by_hash(run["project_id"], parsed.sha256)
                 document = self.storage.upsert_document(run["project_id"], {
                     "filename": parsed.filename,
                     "relative_path": parsed.relative_path,
@@ -126,7 +131,7 @@ class ProjectLensWorkflow:
                     "updated_at": parsed.updated_at,
                     "metadata": parsed.metadata,
                 })
-                if document["id"] not in attached:
+                if document["id"] not in attached and (run["mode"] == "initial" or existing is None):
                     self.storage.add_run_document(run["id"], document["id"])
                     attached.add(document["id"])
         for source_id in run.get("source_ids", []):
@@ -137,6 +142,8 @@ class ProjectLensWorkflow:
             for document in self.storage.list_documents(run["project_id"]):
                 self.storage.add_run_document(run["id"], document["id"])
                 attached.add(document["id"])
+        if not attached and run["mode"] == "incremental":
+            return {"document_count": 0, "source_path": run.get("source_path", "")}, "skip_no_new_sources"
         if not attached:
             raise ValueError("no supported documents were found for this run")
         self.storage.update_run(run["id"], source_ids=sorted(attached))
@@ -210,10 +217,10 @@ class ProjectLensWorkflow:
         decisions = self.storage.list_review_items(run["id"])
         rejected_findings = {item["item_id"] for item in decisions if item["item_type"] == "finding" and item["status"] == "rejected"}
         content["findings"] = [
-            {"title": item["title"], "severity": item["severity"], "description": item["description"], "status": item["status"]}
+            {"title": finding["title"], "severity": finding["severity"], "description": finding["description"], "status": decision["status"]}
             for finding in self.storage.list_findings(run["id"])
             if finding["id"] not in rejected_findings
-            for item in decisions if item["item_type"] == "finding" and item["item_id"] == finding["id"]
+            for decision in decisions if decision["item_type"] == "finding" and decision["item_id"] == finding["id"]
         ]
         rejected_conflicts = {item["item_id"] for item in decisions if item["item_type"] == "conflict" and item["status"] == "rejected"}
         content["open_questions"] = [
@@ -249,4 +256,3 @@ class ProjectLensWorkflow:
         if failed:
             self.storage.upsert_stage(run_id, failed["stage_name"], status="pending", decision="retry")
         return self.execute(run_id)
-
