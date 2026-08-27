@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ollama_api_key: SecretStr | None = None
     ollama_host: str = "https://ollama.com"
     ollama_model: str = "gpt-oss:120b"
+    projectlens_llm_mode: str = "offline"
+    projectlens_llm_provider: str = "auto"
 
 
 @lru_cache(maxsize=1)

@@ -1,6 +1,6 @@
 # ProjectLens
 
-ProjectLens is an agentic document analyst for a synthetic Atlas migration portfolio. It accepts mixed project documents, extracts grounded facts, surfaces conflicts, checks a rules layer, pauses for item-level human decisions, and commits a cited project brief. The first POC is deliberately deterministic and offline-testable; Gemini 3.5 Flash and Ollama Cloud model settings are retained for the model-backed extraction increment.
+ProjectLens is an agentic document analyst for a synthetic Atlas migration portfolio. It accepts mixed project documents, extracts grounded facts, surfaces conflicts, checks a rules layer, pauses for item-level human decisions, and commits a cited project brief. The POC is deterministic and offline-testable by default, with an opt-in live verification path for Gemini 3.5 Flash and Ollama Cloud.
 
 ## First POC architecture
 
@@ -55,6 +55,14 @@ This starts pgvector/PostgreSQL, the API on port 8000, and the React UI on port 
 `.env.example` documents `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `DATABASE_URL`, `PROJECTLENS_STORAGE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `OLLAMA_API_KEY`, `OLLAMA_HOST`, and `OLLAMA_MODEL`. The API prefers `PROJECTLENS_STORAGE_URL`; when it is absent, it falls back to `DATABASE_URL` from `.env`.
 
 The Postgres path initializes the POC relational tables and a `document_chunks` table with a pgvector cosine HNSW index. The offline POC uses lexical retrieval to stay deterministic and free; embeddings and vector queries are intentionally the next increment. The current report builder does not invent facts and the question endpoint explicitly returns an unsupported answer when no committed source supports the question.
+
+To exercise the live path after filling `.env`, set `PROJECTLENS_LLM_MODE=live`. Provider selection is controlled by `PROJECTLENS_LLM_PROVIDER=auto|gemini|ollama`; `auto` prefers Ollama Cloud when its key is present. Live provider output is an advisory only: the deterministic, line-cited extractor remains authoritative and the workflow records a fallback event if a provider is unavailable. Run the external smoke tests explicitly (they can consume quota):
+
+```bash
+PROJECTLENS_RUN_LIVE_TESTS=1 PYTHONPATH=backend/src .venv/bin/pytest -m live -q
+```
+
+The Gemini adapter uses the Google Gen AI SDK and the Ollama adapter uses Ollama's hosted `https://ollama.com` API with `gpt-oss:120b`. Supabase initializes pgvector in the `extensions` schema. The application keeps lexical retrieval as the deterministic baseline; the vector table and index are ready for the embedding-backed retrieval increment.
 
 ## Interfaces
 

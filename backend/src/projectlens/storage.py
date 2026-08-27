@@ -14,14 +14,14 @@ import os
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -171,16 +171,17 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id, id);
 
 POSTGRES_SCHEMA = SCHEMA.replace("PRAGMA foreign_keys = ON;", "").replace("PRAGMA journal_mode = WAL;", "").replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY") + """
 
-CREATE EXTENSION IF NOT EXISTS vector;
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
 CREATE TABLE IF NOT EXISTS document_chunks (
     id TEXT PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding extensions.vector(1536),
     UNIQUE(document_id, chunk_index)
 );
-CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding ON document_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding ON document_chunks USING hnsw (embedding extensions.vector_cosine_ops);
 """
 
 

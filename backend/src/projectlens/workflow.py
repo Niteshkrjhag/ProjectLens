@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import time
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from .analysis import build_deliverable, examine, extract_claims, reconcile
+from .config import get_settings
 from .document_processing import discover_files, parse_file
+from .model_providers import extraction_prompt, provider_for
 from .storage import Storage, utc_now
-
 
 STAGES = ("discover", "extract", "reconcile", "draft", "examine", "human_gate", "commit")
 
@@ -35,7 +37,7 @@ class ProjectLensWorkflow:
         for stage in STAGES:
             graph.add_node(stage, self._node(stage))
         graph.add_edge(START, STAGES[0])
-        for current, following in zip(STAGES, STAGES[1:]):
+        for current, following in pairwise(STAGES):
             graph.add_conditional_edges(current, self._next(following), {"continue": following, "halt": END})
         graph.add_edge(STAGES[-1], END)
         return graph.compile()
@@ -60,15 +62,16 @@ class ProjectLensWorkflow:
         if not run:
             raise KeyError(f"unknown run: {run_id}")
         if run.get("stop_requested"):
+            paused_at = run.get("current_stage") or "the next stage"
             self.storage.update_run(run_id, status="paused", stop_requested=0)
-            self.storage.add_event(run_id, "run_paused", f"Run paused before {stage}", {})
+            self.storage.add_event(run_id, "run_paused", f"Run paused before {paused_at}", {})
             return {"run_id": run_id, "halt": True}
         started = time.perf_counter()
         self.storage.update_run(run_id, status="running", error=None)
         self.storage.add_event(run_id, "run_started", "Workflow started or resumed", {"stop_after_stage": stop_after_stage})
         try:
             self.graph.invoke({"run_id": run_id, "stop_after_stage": stop_after_stage, "halt": False})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - persist any worker failure for retry/recovery
             self.storage.update_run(run_id, status="failed", error=str(exc), duration_ms=int((time.perf_counter() - started) * 1000))
             self.storage.add_event(run_id, "run_failed", "Workflow failed", {"error": str(exc)})
         else:
@@ -152,10 +155,27 @@ class ProjectLensWorkflow:
     def _stage_extract(self, run: dict[str, Any]) -> tuple[dict[str, Any], str]:
         documents = self.storage.list_run_documents(run["id"])
         claims: list[dict[str, Any]] = []
+        model_runs: list[dict[str, Any]] = []
+        settings = get_settings()
+        provider_name = settings.projectlens_llm_provider.lower().strip()
+        if provider_name == "auto":
+            provider_name = "ollama" if settings.ollama_api_key else "gemini"
+        provider = provider_for(provider_name, settings) if settings.projectlens_llm_mode.lower() == "live" else None
         for document in documents:
-            claims.extend(extract_claims(document))
+            document_claims = extract_claims(document)
+            if provider:
+                try:
+                    response = provider.generate(extraction_prompt(document["content"], document["filename"]))
+                    model_runs.append({"provider": response.provider, "model": response.model, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens, "output_chars": len(response.text), "status": "ok"})
+                    for claim in document_claims:
+                        claim.setdefault("metadata", {}).update({"model_verifier": response.provider, "model_verified": True})
+                except Exception as exc:  # noqa: BLE001 - provider failure must preserve deterministic extraction
+                    model_runs.append({"provider": provider_name, "status": "fallback", "error": f"{type(exc).__name__}: {str(exc).splitlines()[0][:180]}"})
+                    self.storage.add_event(run["id"], "model_fallback", "Live provider unavailable; deterministic extraction retained", {"provider": provider_name, "error": str(exc).splitlines()[0][:180]})
+            claims.extend(document_claims)
         self.storage.replace_claims(run["id"], claims)
-        return {"document_count": len(documents), "claim_count": len(claims)}, "continue"
+        decision = "model_verified" if any(item.get("status") == "ok" for item in model_runs) else "deterministic"
+        return {"document_count": len(documents), "claim_count": len(claims), "model_runs": model_runs}, decision
 
     def _effective_inputs(self, run: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         documents = self.storage.list_run_documents(run["id"])
