@@ -1,25 +1,8 @@
-import { ChangeEvent, DragEvent, FormEvent, ReactNode, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-type IconName =
-  | "grid"
-  | "plus"
-  | "folder"
-  | "chat"
-  | "document"
-  | "activity"
-  | "spark"
-  | "help"
-  | "settings"
-  | "user"
-  | "upload"
-  | "send"
-  | "check"
-  | "chevron"
-  | "search"
-  | "shield"
-  | "arrow";
+type IconName = "grid" | "plus" | "folder" | "chat" | "document" | "activity" | "spark" | "help" | "settings" | "upload" | "send" | "check" | "chevron" | "search" | "shield" | "arrow" | "alert" | "play" | "refresh";
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -32,7 +15,6 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     spark: <><path d="m12 3 1.6 6.4L20 11l-6.4 1.6L12 19l-1.6-6.4L4 11l6.4-1.6z" /><path d="m19 3 .5 2.5L22 6l-2.5.5L19 9l-.5-2.5L16 6l2.5-.5z" /></>,
     help: <><circle cx="12" cy="12" r="9" /><path d="M9.8 9a2.3 2.3 0 1 1 3.8 1.7c-1 .7-1.6 1.1-1.6 2.5M12 16.5h.01" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.7 1.7-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.1h-2.4v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L7 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H5.7v-2.4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L7 8.6l1.7-1.7.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.1h2.4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.7 1.7-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1V14h-.1a1.7 1.7 0 0 0-1.6 1z" /></>,
-    user: <><circle cx="12" cy="8" r="3" /><path d="M5 20a7 7 0 0 1 14 0" /></>,
     upload: <><path d="M12 16V4M8 8l4-4 4 4M5 14v5h14v-5" /></>,
     send: <><path d="m21 3-7.5 18-3.2-7.3L3 10.5zM10.3 13.7 21 3" /></>,
     check: <><path d="m5 12 4 4L19 6" /></>,
@@ -40,117 +22,76 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     search: <><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></>,
     shield: <><path d="M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
+    alert: <><path d="m12 4 8 16H4z" /><path d="M12 9v4M12 17h.01" /></>,
+    play: <path d="m9 6 10 6-10 6z" />,
+    refresh: <><path d="M20 11a8 8 0 0 0-14.7-3L4 10M4 5v5h5M4 13a8 8 0 0 0 14.7 3L20 14m0 5v-5h-5" /></>,
   };
   return <svg aria-hidden="true" className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-function BrandMark() {
-  return <div className="brand-mark" aria-hidden="true"><span className="brand-page"><span /></span><span className="brand-ring" /></div>;
-}
+function BrandMark() { return <div className="brand-mark" aria-hidden="true"><span className="brand-page"><span /></span><span className="brand-ring" /></div>; }
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const navItems: Array<[IconName, string]> = [["grid", "Overview"], ["folder", "Projects"], ["chat", "Conversations"], ["document", "Documents"], ["activity", "Activity"]];
 const fileTree = {
   mandatory: [
-    { key: "requirements", label: "Requirements / PRD" },
-    { key: "architecture", label: "Architecture / Technical Design" },
-    { key: "status", label: "Sprint / Project Status" },
-    { key: "issues", label: "Issue / Bug Report" },
-    { key: "rules", label: "Engineering / Release / Security Rules" },
+    { key: "requirements", label: "Requirements / PRD", category: "requirements_prd" }, { key: "architecture", label: "Architecture / Technical Design", category: "architecture_technical_design" },
+    { key: "status", label: "Sprint / Project Status", category: "sprint_project_status" }, { key: "issues", label: "Issue / Bug Report", category: "issue_bug" }, { key: "rules", label: "Engineering / Release / Security Rules", category: "rules" },
   ],
   optional: [
-    { key: "adrs", label: "ADRs" },
-    { key: "meeting-notes", label: "Meeting Notes" },
-    { key: "qa", label: "QA / Test Reports" },
-    { key: "release-notes", label: "Release Notes" },
-    { key: "changelogs", label: "Changelogs" },
-    { key: "security-reviews", label: "Security Reviews" },
-    { key: "deployment", label: "Deployment Reports" },
-    { key: "api-docs", label: "API Documentation" },
-    { key: "roadmaps", label: "Roadmaps" },
-    { key: "retrospectives", label: "Retrospectives" },
+    { key: "adrs", label: "ADRs", category: "adr" }, { key: "meeting-notes", label: "Meeting Notes", category: "meeting_notes" }, { key: "qa", label: "QA / Test Reports", category: "qa_test_report" },
+    { key: "release-notes", label: "Release Notes", category: "release_notes" }, { key: "changelogs", label: "Changelogs", category: "changelog" }, { key: "security-reviews", label: "Security Reviews", category: "security_review" },
+    { key: "deployment", label: "Deployment Reports", category: "deployment_report" }, { key: "api-docs", label: "API Documentation", category: "api_documentation" }, { key: "roadmaps", label: "Roadmaps", category: "roadmap" }, { key: "retrospectives", label: "Retrospectives", category: "retrospective" },
   ],
 } as const;
 type UploadTarget = "mandatory" | "optional" | (typeof fileTree.mandatory[number]["key"] | typeof fileTree.optional[number]["key"]);
+type Project = { id: string; name: string };
+type Document = { id: string; filename: string; category: string; relative_path: string };
+type ReviewItem = { id: string; item_type: string; title: string; description: string; status: string };
+type Run = { id: string; status: string; current_stage: string | null; stages: Array<{ stage_name: string; status: string; decision: string; duration_ms: number }>; documents: Document[]; review_items: ReviewItem[]; deliverable: { status: string; content: { title: string; grounding: string; sections: Record<string, { label: string; entries: Array<{ value: string; source: string; line_start: number; line_end: number; quote: string }> }>; findings: Array<{ title: string; severity: string; description: string }>; open_questions: string[] } } | null; error: string | null };
+type ChatMessage = { role: "user" | "assistant"; text: string; citations?: Array<{ source: string; line_start: number; line_end: number; quote: string }> };
 
 function App() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [activeNav, setActiveNav] = useState("Overview");
-  const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash");
-  const [isReviewMode, setIsReviewMode] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [fileName, setFileName] = useState("");
-  const [zoom, setZoom] = useState(100);
-  const [uploadTarget, setUploadTarget] = useState<UploadTarget>("mandatory");
-  const [uploadedFiles, setUploadedFiles] = useState<Record<string, string[]>>({});
+  const [activeNav, setActiveNav] = useState("Overview"); const [project, setProject] = useState<Project | null>(null); const [documents, setDocuments] = useState<Document[]>([]); const [run, setRun] = useState<Run | null>(null); const [apiConnected, setApiConnected] = useState(false);
+  const [message, setMessage] = useState(""); const [messages, setMessages] = useState<ChatMessage[]>([]); const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash"); const [isReviewMode, setIsReviewMode] = useState(false); const [isDragging, setIsDragging] = useState(false); const [fileName, setFileName] = useState(""); const [zoom, setZoom] = useState(100); const [uploadTarget, setUploadTarget] = useState<UploadTarget>("mandatory"); const [uploadedFiles, setUploadedFiles] = useState<Record<string, string[]>>({}); const [busy, setBusy] = useState(false); const [notice, setNotice] = useState("");
 
-  const acceptFiles = (files: FileList | null, target = uploadTarget) => {
-    const file = files?.[0];
-    if (file) {
-      setFileName(file.name);
-      setUploadedFiles((current) => ({ ...current, [target]: [...current[target], file.name] }));
-    }
-  };
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragging(false);
-    acceptFiles(event.dataTransfer.files);
-  };
-  const openFolderUpload = (target: UploadTarget) => {
-    setUploadTarget(target);
-    inputRef.current?.click();
-  };
-  const folderFileCount = (folder: "mandatory" | "optional") => [folder, ...fileTree[folder].map(({ key }) => key)].reduce((count, key) => count + (uploadedFiles[key]?.length ?? 0), 0);
-  const submitMessage = (event: FormEvent) => {
-    event.preventDefault();
-    const trimmed = message.trim();
-    if (!trimmed) return;
-    setMessages((current) => [...current, trimmed]);
-    setMessage("");
-  };
-  const onFileChange = (event: ChangeEvent<HTMLInputElement>) => acceptFiles(event.target.files);
+  const request = async <T,>(path: string, init?: RequestInit): Promise<T> => { const response = await fetch(`${API_BASE}${path}`, init); if (!response.ok) throw new Error(await response.text() || `Request failed (${response.status})`); return response.json() as Promise<T>; };
+  const syncDocuments = (items: Document[]) => { setDocuments(items); const next: Record<string, string[]> = {}; items.forEach((item) => { const target = [...fileTree.mandatory, ...fileTree.optional].find((entry) => entry.category === item.category)?.key ?? "mandatory"; next[target] = [...(next[target] ?? []), item.filename]; }); setUploadedFiles(next); };
+  const bootstrap = async () => { try { await request("/health"); setApiConnected(true); const projects = await request<Project[]>("/projects"); const current = projects[0] ?? await request<Project>("/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Atlas migration" }) }); setProject(current); syncDocuments(await request<Document[]>(`/projects/${current.id}/documents`)); } catch { setApiConnected(false); setNotice("Preview mode — start the backend to save uploads and run reviews."); } };
+  useEffect(() => { void bootstrap(); }, []);
+  useEffect(() => { if (!run || !["queued", "running"].includes(run.status)) return; const timer = window.setInterval(() => { void request<Run>(`/runs/${run.id}`).then(setRun).catch(() => undefined); }, 700); return () => window.clearInterval(timer); }, [run?.id, run?.status]);
+
+  const categoryForTarget = (target: UploadTarget) => [...fileTree.mandatory, ...fileTree.optional].find((entry) => entry.key === target)?.category;
+  const acceptFiles = async (files: FileList | null, target = uploadTarget) => { const selected = Array.from(files ?? []); if (!selected.length) return; setBusy(true); setFileName(selected[0].name); try { for (const file of selected) { if (apiConnected && project) { const form = new FormData(); form.append("file", file); const category = categoryForTarget(target); if (category) form.append("category", category); await request<Document>(`/projects/${project.id}/documents`, { method: "POST", body: form }); } setUploadedFiles((current) => ({ ...current, [target]: [...(current[target] ?? []), file.name] })); } if (apiConnected && project) syncDocuments(await request<Document[]>(`/projects/${project.id}/documents`)); setNotice(`${selected.length} document${selected.length > 1 ? "s" : ""} added to ${target === "mandatory" || target === "optional" ? target : "project context"}.`); } catch (error) { setNotice(error instanceof Error ? error.message : "Upload failed"); } finally { setBusy(false); } };
+  const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setIsDragging(false); void acceptFiles(event.dataTransfer.files); }; const openFolderUpload = (target: UploadTarget) => { setUploadTarget(target); inputRef.current?.click(); }; const folderFileCount = (folder: "mandatory" | "optional") => [folder, ...fileTree[folder].map(({ key }) => key)].reduce((count, key) => count + (uploadedFiles[key]?.length ?? 0), 0);
+  const startAnalysis = async () => { if (!project || !apiConnected) { setNotice("Start the backend to run the durable analysis."); return; } setBusy(true); try { const next = await request<Run>(`/projects/${project.id}/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "initial", background: true }) }); setRun(next); setNotice("Analysis started — follow each stage on the right."); } catch (error) { setNotice(error instanceof Error ? error.message : "Could not start analysis"); } finally { setBusy(false); } };
+  const decide = async (item: ReviewItem, decision: "approve" | "reject") => { if (!run) return; try { setRun(await request<Run>(`/runs/${run.id}/review/${item.id}/${decision}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decided_by: "reviewer" }) })); } catch (error) { setNotice(error instanceof Error ? error.message : "Decision failed"); } };
+  const submitMessage = async (event: FormEvent) => { event.preventDefault(); const trimmed = message.trim(); if (!trimmed) return; setMessages((current) => [...current, { role: "user", text: trimmed }]); setMessage(""); if (apiConnected && project) { try { const answer = await request<{ answer: string; citations: ChatMessage["citations"] }>(`/projects/${project.id}/ask`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: trimmed }) }); setMessages((current) => [...current, { role: "assistant", text: answer.answer, citations: answer.citations }]); } catch { setMessages((current) => [...current, { role: "assistant", text: "I could not reach the project context right now." }]); } } else setMessages((current) => [...current, { role: "assistant", text: "Connect the backend and I’ll answer from committed, cited project context." }]); };
+  const pendingItems = run?.review_items.filter((item) => item.status === "pending") ?? []; const committed = run?.deliverable?.status === "committed";
 
   return <div className="app-shell">
-    <aside className="rail">
-      <div className="rail-top"><BrandMark /><span className="rail-divider" /></div>
-      <nav aria-label="Main navigation" className="rail-nav">
-        {navItems.map(([icon, label]) => <button key={label} className={`rail-button ${activeNav === label ? "active" : ""}`} onClick={() => setActiveNav(label)} aria-label={label} title={label}><Icon name={icon} /></button>)}
-      </nav>
-      <div className="rail-bottom"><button className="rail-button" aria-label="AI insights"><Icon name="spark" /></button><button className="rail-button" aria-label="Help"><Icon name="help" /></button><button className="rail-button" aria-label="Settings"><Icon name="settings" /></button><button className="avatar" aria-label="Profile">NJ</button></div>
-    </aside>
-
-    <header className="topbar">
-      <div className="wordmark"><BrandMark /><span>Project<span>Lens</span></span></div>
-      <div className="project-context"><span className="status-dot" /> <span>Workspace / <strong>Atlas migration</strong></span><Icon name="chevron" size={14} /></div>
-      <div className="top-actions"><button className="icon-button" aria-label="Search"><Icon name="search" /></button><button className="new-project"><Icon name="plus" size={16} /> New project</button><button className="user-chip"><span className="avatar tiny">NJ</span><span>Nitesh</span><Icon name="chevron" size={14} /></button></div>
-    </header>
-
-    <main className="workspace">
-      <section className="left-pane">
-        <div className="conversation-toolbar"><button className="conversation-title" onClick={() => setMessages([])}><span className="round-plus"><Icon name="plus" size={16} /></span> New conversation</button><button className="cross-session">Cross-session <Icon name="chevron" size={14} /></button></div>
-        <div className="file-library">
-          <div className="file-library-heading"><div><span className="small-label">PROJECT FILES</span><strong>Context library</strong></div><button className="library-add" aria-label="Upload a project file" onClick={() => openFolderUpload(uploadTarget)}><Icon name="plus" size={15} /></button></div>
-          <div className="file-tree">
-            <div className="file-folder mandatory-folder"><div className="folder-row"><Icon name="chevron" size={13} /><Icon name="folder" size={16} /><strong>Mandatory</strong><span className="folder-count">{folderFileCount("mandatory")}</span><button aria-label="Upload to Mandatory" onClick={() => openFolderUpload("mandatory")}><Icon name="plus" size={14} /></button></div><div className="folder-hint">Required to understand the project</div><div className="category-list">{fileTree.mandatory.map(({ key, label }) => <div className="category-with-files" key={key}><button className="category-row" onClick={() => openFolderUpload(key)}><Icon name="document" size={13} /><span>{label}</span><Icon name="plus" size={12} /></button>{(uploadedFiles[key] ?? []).map((name) => <div className="file-row" key={`${key}-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>)}</div>{(uploadedFiles.mandatory ?? []).map((name) => <div className="file-row" key={`mandatory-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>
-            <div className="file-folder optional-folder"><div className="folder-row"><Icon name="chevron" size={13} /><Icon name="folder" size={16} /><strong>Optional</strong><span className="folder-count">{folderFileCount("optional")}</span><button aria-label="Upload to Optional" onClick={() => openFolderUpload("optional")}><Icon name="plus" size={14} /></button></div><div className="folder-hint">Useful supporting context</div><div className="category-list optional-list">{fileTree.optional.map(({ key, label }) => <div className="category-with-files" key={key}><button className="category-row" onClick={() => openFolderUpload(key)}><Icon name="document" size={13} /><span>{label}</span><Icon name="plus" size={12} /></button>{(uploadedFiles[key] ?? []).map((name) => <div className="file-row" key={`${key}-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>)}</div>{(uploadedFiles.optional ?? []).map((name) => <div className="file-row" key={`optional-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>
-          </div>
-          <p className="file-format-note">PDF · DOCX · MD · TXT · RTF · HTML · ZIP</p>
-        </div>
-        <div className="chat-scroll">
-          <div className="welcome-card"><div className="eyebrow"><span className="eyebrow-dot" /> PROJECTLENS INTELLIGENCE</div><h1>See the whole project.</h1><p className="welcome-lead">Your context-aware document assistant for turning project knowledge into confident decisions.</p><div className="capability-list"><div><strong>Collect</strong><span>Bring PRDs, designs, issues, and release notes into one view.</span></div><div><strong>Connect</strong><span>Trace decisions, risks, and blockers across every source.</span></div><div><strong>Decide</strong><span>Ask grounded questions with citations and clear next steps.</span></div></div><div className="welcome-foot"><Icon name="shield" size={15} /> Rules-aware answers, always grounded in your workspace.</div></div>
-          {messages.length > 0 && <div className="message-stack">{messages.map((item, index) => <div className="user-message" key={`${item}-${index}`}>{item}</div>)}<div className="assistant-message"><span className="mini-mark"><BrandMark /></span><div><strong>ProjectLens is ready.</strong><p>I’ll use your uploaded project context and document rules to work through that.</p></div></div></div>}
-        </div>
-        <form className="composer" onSubmit={submitMessage}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Ask about your project…" aria-label="Message ProjectLens" rows={3} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitMessage(event); } }} /><div className="composer-footer"><div className="composer-tools"><button type="button" className="attach-button" aria-label="Attach a document" onClick={() => inputRef.current?.click()}><Icon name="upload" size={17} /></button><input ref={inputRef} type="file" hidden accept=".pdf,.docx,.txt,.md,.rtf,.html,.zip" onChange={onFileChange} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model"><option>Gemini 3.5 Flash</option><option>Ollama · GPT OSS 120B</option></select><button type="button" className={`review-toggle ${isReviewMode ? "on" : ""}`} onClick={() => setIsReviewMode((current) => !current)}><Icon name="shield" size={15} /> Review mode</button></div><button className="send-button" type="submit" aria-label="Send message"><Icon name="arrow" size={18} /></button></div></form>
-      </section>
-
-      <section className="document-pane">
-        <div className="document-toolbar"><div className="toolbar-left"><span className="doc-type">PROJECT BRIEF</span><span className="toolbar-separator" /><span className="doc-title">Atlas migration plan</span><span className="saved-badge"><Icon name="check" size={13} /> Saved</span></div><div className="toolbar-right"><button className="toolbar-button"><Icon name="activity" size={16} /> Activity</button><button className="toolbar-button accent"><Icon name="upload" size={16} /> Upload</button><button className="toolbar-button filled">Export <Icon name="chevron" size={14} /></button></div></div>
-        <div className="document-area"><div className="doc-summary"><div><span className="small-label">ACTIVE PROJECT</span><h2>Atlas migration</h2><p>One shared source of truth for delivery, risk, and release readiness.</p></div><div className="summary-metrics"><span><strong>12</strong> sources</span><span><strong>4</strong> open risks</span><span><strong>86%</strong> coverage</span></div></div><div className="document-canvas"><div className="canvas-header"><span>PROJECT CONTEXT</span><span className="canvas-date">Updated today · 09:42</span></div><h3>Let’s make your project legible.</h3><p className="canvas-intro">Upload the documents that hold your project together. ProjectLens will classify them, connect the context, and surface what needs your attention.</p><div className={`drop-zone ${isDragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} onClick={() => inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") inputRef.current?.click(); }}><div className="drop-icon"><Icon name="document" size={27} /></div><strong>{fileName || "Drop your first document here"}</strong><span>{fileName ? "Ready to add to your project context" : "or choose a file from your computer"}</span><button type="button" className="choose-file" onClick={(event) => { event.stopPropagation(); inputRef.current?.click(); }}><Icon name="upload" size={16} /> Choose file</button><small>PDF · DOCX · TXT · MD · RTF · HTML · ZIP <em>≤ 100 MB</em></small></div><div className="suggested-row"><div className="section-heading"><span className="small-label">START WITH</span><span>Recommended context</span></div><div className="suggested-cards"><div className="suggested-card"><span className="card-icon mint"><Icon name="document" size={17} /></span><span><strong>Requirements / PRD</strong><small>Define what good looks like</small></span><span className="priority">01</span></div><div className="suggested-card"><span className="card-icon coral"><Icon name="activity" size={17} /></span><span><strong>Architecture / Design</strong><small>Understand how it works</small></span><span className="priority">02</span></div><div className="suggested-card"><span className="card-icon gold"><Icon name="shield" size={17} /></span><span><strong>Release checklist</strong><small>Keep constraints visible</small></span><span className="priority">03</span></div></div></div></div></div><div className="zoom-controls"><button onClick={() => setZoom((value) => Math.max(70, value - 10))}>−</button><span>{zoom}%</span><button onClick={() => setZoom((value) => Math.min(130, value + 10))}>+</button></div></section>
-    </main>
+    <aside className="rail"><div className="rail-top"><BrandMark /><span className="rail-divider" /></div><nav aria-label="Main navigation" className="rail-nav">{navItems.map(([icon, label]) => <button key={label} className={`rail-button ${activeNav === label ? "active" : ""}`} onClick={() => setActiveNav(label)} aria-label={label} title={label}><Icon name={icon} /></button>)}</nav><div className="rail-bottom"><button className="rail-button" aria-label="AI insights"><Icon name="spark" /></button><button className="rail-button" aria-label="Help"><Icon name="help" /></button><button className="rail-button" aria-label="Settings"><Icon name="settings" /></button><button className="avatar" aria-label="Profile">NJ</button></div></aside>
+    <header className="topbar"><div className="wordmark"><BrandMark /><span>Project<span>Lens</span></span></div><div className="project-context"><span className={`status-dot ${apiConnected ? "" : "offline"}`} /> <span>Workspace / <strong>{project?.name ?? "Atlas migration"}</strong></span><Icon name="chevron" size={14} /></div><div className="top-actions"><button className="icon-button" aria-label="Search"><Icon name="search" /></button><button className="new-project"><Icon name="plus" size={16} /> New project</button><button className="user-chip"><span className="avatar tiny">NJ</span><span>Nitesh</span><Icon name="chevron" size={14} /></button></div></header>
+    <main className="workspace"><section className="left-pane">
+      <div className="conversation-toolbar"><button className="conversation-title" onClick={() => setMessages([])}><span className="round-plus"><Icon name="plus" size={16} /></span> New conversation</button><button className="cross-session">Cross-session <Icon name="chevron" size={14} /></button></div>
+      <div className="file-library"><div className="file-library-heading"><div><span className="small-label">PROJECT FILES</span><strong>Context library</strong></div><button className="library-add" aria-label="Upload a project file" onClick={() => openFolderUpload(uploadTarget)}><Icon name="plus" size={15} /></button></div><div className="file-tree">
+        <div className="file-folder mandatory-folder"><div className="folder-row"><Icon name="chevron" size={13} /><Icon name="folder" size={16} /><strong>Mandatory</strong><span className="folder-count">{folderFileCount("mandatory")}</span><button aria-label="Upload to Mandatory" onClick={() => openFolderUpload("mandatory")}><Icon name="plus" size={14} /></button></div><div className="folder-hint">Required to understand the project</div><div className="category-list">{fileTree.mandatory.map(({ key, label }) => <div className="category-with-files" key={key}><button className="category-row" onClick={() => openFolderUpload(key)}><Icon name="document" size={13} /><span>{label}</span><Icon name="plus" size={12} /></button>{(uploadedFiles[key] ?? []).map((name) => <div className="file-row" key={`${key}-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>)}</div>{(uploadedFiles.mandatory ?? []).map((name) => <div className="file-row" key={`mandatory-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>
+        <div className="file-folder optional-folder"><div className="folder-row"><Icon name="chevron" size={13} /><Icon name="folder" size={16} /><strong>Optional</strong><span className="folder-count">{folderFileCount("optional")}</span><button aria-label="Upload to Optional" onClick={() => openFolderUpload("optional")}><Icon name="plus" size={14} /></button></div><div className="folder-hint">Useful supporting context</div><div className="category-list optional-list">{fileTree.optional.map(({ key, label }) => <div className="category-with-files" key={key}><button className="category-row" onClick={() => openFolderUpload(key)}><Icon name="document" size={13} /><span>{label}</span><Icon name="plus" size={12} /></button>{(uploadedFiles[key] ?? []).map((name) => <div className="file-row" key={`${key}-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>)}</div>{(uploadedFiles.optional ?? []).map((name) => <div className="file-row" key={`optional-${name}`}><Icon name="document" size={14} /><span>{name}</span></div>)}</div>
+      </div><p className="file-format-note">PDF · DOCX · MD · TXT · RTF · HTML</p></div>
+      <div className="chat-scroll"><div className="welcome-card"><div className="eyebrow"><span className="eyebrow-dot" /> PROJECTLENS INTELLIGENCE</div><h1>See the whole project.</h1><p className="welcome-lead">Your context-aware document assistant for turning project knowledge into confident decisions.</p><div className="capability-list"><div><strong>Collect</strong><span>Bring PRDs, designs, issues, and release notes into one view.</span></div><div><strong>Connect</strong><span>Trace decisions, risks, and blockers across every source.</span></div><div><strong>Decide</strong><span>Ask grounded questions with citations and clear next steps.</span></div></div><div className="welcome-foot"><Icon name="shield" size={15} /> Rules-aware answers, always grounded in your workspace.</div></div>{messages.length > 0 && <div className="message-stack">{messages.map((item, index) => <div className={item.role === "user" ? "user-message" : "assistant-message"} key={`${item.role}-${index}`}><span className={item.role === "assistant" ? "mini-mark" : "message-role"}>{item.role === "assistant" ? <BrandMark /> : "You"}</span><div><strong>{item.role === "assistant" ? "ProjectLens" : "You"}</strong><p>{item.text}</p>{item.citations?.map((citation, citationIndex) => <small className="citation" key={`${citation.source}-${citationIndex}`}>{citation.source}:{citation.line_start} · “{citation.quote}”</small>)}</div></div>)}</div>}</div>
+      <form className="composer" onSubmit={(event) => { void submitMessage(event); }}><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Ask about your project…" aria-label="Message ProjectLens" rows={3} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submitMessage(event); } }} /><div className="composer-footer"><div className="composer-tools"><button type="button" className="attach-button" aria-label="Attach a document" onClick={() => inputRef.current?.click()}><Icon name="upload" size={17} /></button><input ref={inputRef} type="file" hidden multiple accept=".pdf,.docx,.txt,.md,.rtf,.html" onChange={(event: ChangeEvent<HTMLInputElement>) => { void acceptFiles(event.target.files); event.target.value = ""; }} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Select model"><option>Gemini 3.5 Flash</option><option>Ollama · GPT OSS 120B</option></select><button type="button" className={`review-toggle ${isReviewMode || pendingItems.length ? "on" : ""}`} onClick={() => setIsReviewMode((current) => !current)}><Icon name="shield" size={15} /> Review mode {pendingItems.length ? `· ${pendingItems.length}` : ""}</button></div><button className="send-button" type="submit" aria-label="Send message"><Icon name="arrow" size={18} /></button></div></form>
+    </section><section className="document-pane">
+      <div className="document-toolbar"><div className="toolbar-left"><span className="doc-type">PROJECT BRIEF</span><span className="toolbar-separator" /><span className="doc-title">{project?.name ?? "Atlas migration"} plan</span><span className={`saved-badge ${committed ? "" : "unsaved"}`}><Icon name={committed ? "check" : "activity"} size={13} /> {committed ? "Committed" : run ? run.status.replace("_", " ") : "Ready"}</span></div><div className="toolbar-right"><button className="toolbar-button"><Icon name="activity" size={16} /> Activity</button><button className="toolbar-button accent" onClick={() => openFolderUpload(uploadTarget)}><Icon name="upload" size={16} /> Upload</button><button className="toolbar-button filled" onClick={() => void startAnalysis()} disabled={busy || !documents.length}><Icon name="play" size={14} /> {busy ? "Working" : "Analyze"}</button></div></div>
+      <div className="document-area"><div className="doc-summary"><div><span className="small-label">ACTIVE PROJECT</span><h2>{project?.name ?? "Atlas migration"}</h2><p>One shared source of truth for delivery, risk, and release readiness.</p></div><div className="summary-metrics"><span><strong>{documents.length}</strong> sources</span><span><strong>{pendingItems.length}</strong> pending review</span><span><strong>{run?.stages.filter((stage) => stage.status === "completed").length ?? 0}/7</strong> stages</span></div></div>{notice && <div className="notice-banner"><Icon name={apiConnected ? "check" : "alert"} size={15} /> {notice}</div>}
+        <div className="document-canvas"><div className="canvas-header"><span>{run ? "LIVE WORKFLOW" : "PROJECT CONTEXT"}</span><span className="canvas-date">{apiConnected ? "Backend connected" : "Offline preview"}</span></div>
+          {!run && <><h3>Let’s make your project legible.</h3><p className="canvas-intro">Upload the documents that hold your project together. ProjectLens will classify them, connect the context, and surface what needs your attention.</p><div className={`drop-zone ${isDragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} onClick={() => inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") inputRef.current?.click(); }}><div className="drop-icon"><Icon name="document" size={27} /></div><strong>{fileName || "Drop your first document here"}</strong><span>{fileName ? "Ready to add to your project context" : "or choose a file from your computer"}</span><button type="button" className="choose-file" onClick={(event) => { event.stopPropagation(); inputRef.current?.click(); }}><Icon name="upload" size={16} /> Choose file</button><small>PDF · DOCX · TXT · MD · RTF · HTML <em>≤ 100 MB</em></small></div></>}
+          {run && <><div className="run-heading"><div><h3>{run.status === "awaiting_review" ? "Human review is the next step." : run.status === "committed" ? "The brief is ready to review." : run.status === "failed" ? "This run needs attention." : "ProjectLens is working."}</h3><p className="canvas-intro">{run.error ?? "Every stage leaves a visible decision and evidence trail."}</p></div>{run.status === "failed" && <button className="toolbar-button accent" onClick={() => void request<Run>(`/runs/${run.id}/retry`, { method: "POST" }).then(setRun)}><Icon name="refresh" size={15} /> Retry</button>}</div><div className="stage-list">{run.stages.map((stage) => <div className={`stage-row ${stage.status}`} key={stage.stage_name}><span className="stage-index">{stage.status === "completed" ? <Icon name="check" size={14} /> : stage.status === "failed" ? <Icon name="alert" size={14} /> : "·"}</span><span className="stage-name">{stage.stage_name.replace("_", " ")}</span><span className="stage-decision">{stage.decision || stage.status}</span><span className="stage-duration">{stage.duration_ms ? `${stage.duration_ms}ms` : ""}</span></div>)}</div>{pendingItems.length > 0 && <div className="review-panel"><div className="section-heading"><span className="small-label">HUMAN GATE</span><span>{pendingItems.length} decision{pendingItems.length === 1 ? "" : "s"} required before commit</span></div>{pendingItems.map((item) => <div className="review-card" key={item.id}><div className="review-card-copy"><span className="review-kind">{item.item_type}</span><strong>{item.title}</strong><p>{item.description}</p></div><div className="review-actions"><button className="review-reject" onClick={() => void decide(item, "reject")}>Reject</button><button className="review-approve" onClick={() => void decide(item, "approve")}><Icon name="check" size={14} /> Approve</button></div></div>)}</div>}{run.deliverable && <div className="report-preview"><div className="section-heading"><span className="small-label">GROUNDED DELIVERABLE</span><span>{run.deliverable.status}</span></div><p className="grounding-note"><Icon name="shield" size={14} /> {run.deliverable.content.grounding}</p>{Object.entries(run.deliverable.content.sections).slice(0, 8).map(([key, section]) => <div className="report-section" key={key}><strong>{section.label}</strong>{section.entries.slice(0, 2).map((entry, index) => <div className="report-entry" key={`${key}-${index}`}><span>{entry.value}</span><small>{entry.source}:{entry.line_start}</small></div>)}</div>)}{run.deliverable.content.findings.length > 0 && <div className="report-findings"><strong>Findings</strong>{run.deliverable.content.findings.map((finding) => <span key={finding.title}><Icon name="alert" size={13} /> {finding.title}</span>)}</div>}</div>}</>}
+          {!run && <div className="suggested-row"><div className="section-heading"><span className="small-label">START WITH</span><span>Recommended context</span></div><div className="suggested-cards"><div className="suggested-card"><span className="card-icon mint"><Icon name="document" size={17} /></span><span><strong>Requirements / PRD</strong><small>Define what good looks like</small></span><span className="priority">01</span></div><div className="suggested-card"><span className="card-icon coral"><Icon name="activity" size={17} /></span><span><strong>Architecture / Design</strong><small>Understand how it works</small></span><span className="priority">02</span></div><div className="suggested-card"><span className="card-icon gold"><Icon name="shield" size={17} /></span><span><strong>Release checklist</strong><small>Keep constraints visible</small></span><span className="priority">03</span></div></div></div>}
+        </div><div className="zoom-controls"><button onClick={() => setZoom((value) => Math.max(70, value - 10))}>−</button><span>{zoom}%</span><button onClick={() => setZoom((value) => Math.min(130, value + 10))}>+</button></div></div>
+    </section></main>
   </div>;
 }
 
 export default App;
-
 createRoot(document.getElementById("root")!).render(<App />);
