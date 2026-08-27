@@ -1,6 +1,4 @@
 services:
-  # Optional local fallback. Supabase is the default database when DATABASE_URL
-  # points at your Supabase pooler or direct Postgres connection.
   postgres:
     image: pgvector/pgvector:pg18
     container_name: projectlens-postgres
@@ -18,6 +16,37 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      PROJECTLENS_STORAGE_URL: ${PROJECTLENS_STORAGE_URL:-postgresql://projectlens:projectlens@postgres:5432/projectlens}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://projectlens:projectlens@postgres:5432/projectlens}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-https://ollama.com}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gpt-oss:120b}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:

@@ -1,33 +1,93 @@
 # ProjectLens
 
-Initial full-stack foundation for a FastAPI + LangGraph + PostgreSQL/pgvector + React/TypeScript application, using Gemini 3.5 Flash and Ollama Cloud's `gpt-oss:120b`.
+ProjectLens is an agentic document analyst for a synthetic Atlas migration portfolio. It accepts mixed project documents, extracts grounded facts, surfaces conflicts, checks a rules layer, pauses for item-level human decisions, and commits a cited project brief. The first POC is deliberately deterministic and offline-testable; Gemini 3.5 Flash and Ollama Cloud model settings are retained for the model-backed extraction increment.
 
-## Local setup
+## First POC architecture
+
+```text
+documents (upload or watched folder)
+        ↓
+discover → extract → reconcile → draft → examine → human_gate → commit
+        ↓             ↓          ↓          ↓            ↓
+  file hashes    line citations  conflicts  findings   approve/reject
+        └────────────── durable SQLite or Supabase/PostgreSQL state ──────┘
+```
+
+Each stage writes its status, attempt, decision, elapsed time, and event before the next stage runs. A process restart re-queues interrupted runs and skips completed stages. Conflicts and findings must be approved or rejected individually; the last decision resumes the run and commits only after the gate is clear. The MCP tools drive the same workflow as the FastAPI and React interfaces.
+
+## Fresh-clone setup
+
+Requirements: Python 3.12, Node.js 22, and optionally Docker Desktop.
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install -r backend/requirements.txt
-
-cp .env.example .env
-docker compose up -d postgres
-
-cd frontend
-npm install
-npm run build
+cd frontend && npm ci && cd ..
 ```
 
-The backend dependency versions are pinned in `backend/pyproject.toml`; frontend versions are pinned in `frontend/package.json`. `mcp` provides the Python MCP interface and `@modelcontextprotocol/sdk` provides the TypeScript MCP SDK.
+For the no-key, no-network proof:
 
-## Model configuration
+```bash
+PYTHONPATH=backend/src .venv/bin/python -m projectlens.cli demo --source "testing dataset/simple/general" --state-dir data/dry-run --approve-all
+```
 
-Supabase is configured with `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `DATABASE_URL`. Put the Supabase Postgres pooler or direct connection string in `DATABASE_URL`; the backend uses it for application queries and LangGraph/Postgres checkpoint persistence. The secret key is loaded only from `.env` and is never logged or committed.
+The command prints the project, run status, all stage decisions, review decisions, source count, and committed deliverable. It uses SQLite under the selected state directory and never calls a model.
 
-The Google GenAI SDK uses `GEMINI_API_KEY` and `GEMINI_MODEL=gemini-3.5-flash`. Ollama Cloud uses `OLLAMA_API_KEY`, `OLLAMA_HOST=https://ollama.com`, and `OLLAMA_MODEL=gpt-oss:120b-cloud`. Create the Ollama key in your Ollama account; do not commit `.env`.
+To run the web POC locally:
 
-Ollama Cloud requires authentication and the model must be available to the account. The direct cloud API endpoint is `https://ollama.com/api/chat`, using model `gpt-oss:120b`. The `gpt-oss:120b-cloud` name is for requests routed through a local Ollama installation.
+```bash
+PROJECTLENS_STORAGE_URL=sqlite:///./data/projectlens.db PYTHONPATH=backend/src .venv/bin/uvicorn projectlens.api:app --reload --port 8000
+```
 
-## Test layout
+In another terminal, run `npm --prefix frontend run dev` and open http://localhost:5173. The UI creates the local Atlas workspace, uploads documents into the selected Mandatory/Optional category, starts analysis, polls the visible stages, presents the human gate, and displays citations.
 
-Tests are organized as `test/<feature-or-function>/scripts/<test_script>.py`. Current areas include `model_providers` and `document_processing`; add new feature folders under `test/` as the project grows.
+To run the containerized path:
+
+```bash
+docker compose up --build
+```
+
+This starts pgvector/PostgreSQL, the API on port 8000, and the React UI on port 5173. Set `PROJECTLENS_STORAGE_URL` to your Supabase connection string when using Supabase instead of the local Postgres service. Do not commit `.env` or secret keys.
+
+## Supabase, models, and storage
+
+`.env.example` documents `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `DATABASE_URL`, `PROJECTLENS_STORAGE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `OLLAMA_API_KEY`, `OLLAMA_HOST`, and `OLLAMA_MODEL`. The API prefers `PROJECTLENS_STORAGE_URL`; when it is absent, it falls back to `DATABASE_URL` from `.env`.
+
+The Postgres path initializes the POC relational tables and a `document_chunks` table with a pgvector cosine HNSW index. The offline POC uses lexical retrieval to stay deterministic and free; embeddings and vector queries are intentionally the next increment. The current report builder does not invent facts and the question endpoint explicitly returns an unsupported answer when no committed source supports the question.
+
+## Interfaces
+
+- `POST /projects` creates a workspace.
+- `POST /projects/{id}/documents` uploads Markdown, text, PDF, DOCX, RTF, or HTML.
+- `POST /projects/{id}/runs` starts an initial or incremental run.
+- `GET /runs/{id}` returns stages, events, sources, claims, conflicts, findings, review items, and the draft/committed deliverable.
+- `POST /runs/{id}/review/{item_id}/approve` and `/reject` are explicit machine/human gate operations.
+- `POST /projects/{id}/watch/scan` runs a focused incremental scan over a folder.
+- `POST /projects/{id}/ask` answers only from the latest committed brief.
+- `python -m projectlens.mcp_server` exposes equivalent MCP tools over stdio: create project, ingest document, start run, inspect run, approve/reject review item, and ask.
+
+## Tests and dataset
+
+```bash
+PYTHONPATH=backend/src .venv/bin/python -m pytest -q
+npm --prefix frontend run build
+```
+
+Tests live under `test/<feature-or-function>/scripts/`. The end-to-end suite uses real temporary SQLite state and synthetic files. It covers a human-gated commit, restart from a persisted stage boundary, two concurrent runs, document prompt-injection isolation, incremental preservation of unaffected sections, unsupported-answer refusal, FastAPI driving, and MCP registration. The corpus in `testing dataset/` contains 54 unique synthetic documents across simple, medium, complex, day-to-day, rush-day, and light-day scenarios, with general, odd, and even modes and three versions each.
+
+## Explicit POC boundaries
+
+This commit sequence proves the first vertical slice, not a production SaaS. It does not claim production authentication, tenant isolation, object storage, a scheduler daemon, streaming model responses, embedding quality, full ZIP ingestion, or a production migration/observability platform. All fixtures are synthetic. The cut is intentional: a smaller deterministic path with durable stages and real gates is more useful for validating the brief than a model-shaped demo with untestable behavior.
+
+## Commit sequence
+
+The implementation history is organized by coherent milestones:
+
+1. `feat: add durable grounded analysis workflow`
+2. `feat: expose ProjectLens through API and MCP`
+3. `feat: connect review workspace to live POC`
+4. `test: prove POC safety and recovery behaviors`
+5. `feat: add Supabase-ready storage path`
+
+Each commit body records what changed, why, improvements, verification, and explicit non-claims.
