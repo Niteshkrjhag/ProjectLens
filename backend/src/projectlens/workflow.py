@@ -157,7 +157,7 @@ class ProjectLensWorkflow:
         claims: list[dict[str, Any]] = []
         model_runs: list[dict[str, Any]] = []
         settings = get_settings()
-        provider_name = settings.projectlens_llm_provider.lower().strip()
+        provider_name = str(run.get("llm_provider") or settings.projectlens_llm_provider).lower().strip()
         if provider_name == "auto":
             provider_name = "ollama" if settings.ollama_api_key else "gemini"
         provider = provider_for(provider_name, settings) if settings.projectlens_llm_mode.lower() == "live" else None

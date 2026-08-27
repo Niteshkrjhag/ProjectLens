@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     mode TEXT NOT NULL DEFAULT 'initial',
+    llm_provider TEXT NOT NULL DEFAULT 'auto',
     status TEXT NOT NULL,
     current_stage TEXT,
     source_path TEXT NOT NULL DEFAULT '',
@@ -305,8 +306,12 @@ class Storage:
             if self.backend == "sqlite":
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(SCHEMA)
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+                if "llm_provider" not in columns:
+                    connection.execute("ALTER TABLE runs ADD COLUMN llm_provider TEXT NOT NULL DEFAULT 'auto'")
             else:
                 connection.executescript(POSTGRES_SCHEMA)
+                connection.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS llm_provider TEXT NOT NULL DEFAULT 'auto'")
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -397,6 +402,7 @@ class Storage:
         project_id: str,
         *,
         mode: str = "initial",
+        llm_provider: str = "auto",
         source_path: str = "",
         source_ids: list[str] | None = None,
         base_run_id: str | None = None,
@@ -406,9 +412,9 @@ class Storage:
         with self.connection() as connection:
             connection.execute(
                 """INSERT INTO runs
-                (id,project_id,mode,status,source_path,source_ids_json,base_run_id,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?)""",
-                (run_id, project_id, mode, "queued", source_path, _json(source_ids or []), base_run_id, now, now),
+                (id,project_id,mode,llm_provider,status,source_path,source_ids_json,base_run_id,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (run_id, project_id, mode, llm_provider, "queued", source_path, _json(source_ids or []), base_run_id, now, now),
             )
         return self.get_run(run_id)  # type: ignore[return-value]
 
@@ -452,6 +458,13 @@ class Storage:
             row = self._row(connection.execute(
                 "SELECT * FROM runs WHERE project_id=? AND status='committed' ORDER BY completed_at DESC LIMIT 1", (project_id,)
             ).fetchone())
+        if row:
+            row["source_ids"] = decode_json(row.pop("source_ids_json", None), [])
+        return row
+
+    def latest_run(self, project_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = self._row(connection.execute("SELECT * FROM runs WHERE project_id=? ORDER BY created_at DESC LIMIT 1", (project_id,)).fetchone())
         if row:
             row["source_ids"] = decode_json(row.pop("source_ids_json", None), [])
         return row

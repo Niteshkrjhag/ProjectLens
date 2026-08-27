@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 import os
+import threading
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from .analysis import answer_question
 from .config import get_settings
+from .demo import seed_demo
 from .document_policy import DocumentCategory
 from .document_processing import parse_bytes
 from .storage import Storage
@@ -27,7 +28,7 @@ def get_storage() -> Storage:
     if not configured:
         try:
             configured = get_settings().database_url
-        except Exception:
+        except Exception:  # noqa: BLE001 - missing configuration should fall back to offline defaults
             configured = ""
     return Storage(url=configured or None)
 
@@ -44,6 +45,7 @@ class ProjectCreate(BaseModel):
 
 class RunCreate(BaseModel):
     mode: Literal["initial", "incremental"] = "initial"
+    provider: Literal["auto", "gemini", "ollama"] = "auto"
     source_path: str = ""
     source_ids: list[str] = Field(default_factory=list)
     base_run_id: str | None = None
@@ -153,7 +155,7 @@ def list_documents(project_id: str) -> list[dict[str, Any]]:
 @app.post("/projects/{project_id}/documents", status_code=201)
 async def upload_document(
     project_id: str,
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI requires dependency declarations here
     category: str | None = Form(default=None),
 ) -> dict[str, Any]:
     _project_or_404(project_id)
@@ -184,7 +186,7 @@ def create_run(project_id: str, request: RunCreate) -> dict[str, Any]:
     if request.mode == "incremental" and not base_run_id:
         base = get_storage().latest_committed_run(project_id)
         base_run_id = base["id"] if base else None
-    run = get_storage().create_run(project_id, mode=request.mode, source_path=request.source_path, source_ids=request.source_ids, base_run_id=base_run_id)
+    run = get_storage().create_run(project_id, mode=request.mode, llm_provider=request.provider, source_path=request.source_path, source_ids=request.source_ids, base_run_id=base_run_id)
     if request.background:
         manager.submit(run["id"])
         return _run_payload(run["id"])
@@ -262,6 +264,20 @@ def scan_watch_folder(project_id: str, request: RunCreate) -> dict[str, Any]:
     if not request.source_path:
         raise HTTPException(400, "source_path is required for a watch scan")
     base = get_storage().latest_committed_run(project_id)
-    run = get_storage().create_run(project_id, mode="incremental", source_path=request.source_path, base_run_id=base["id"] if base else None)
+    run = get_storage().create_run(project_id, mode="incremental", llm_provider=request.provider, source_path=request.source_path, base_run_id=base["id"] if base else None)
     manager.submit(run["id"])
     return _run_payload(run["id"])
+
+
+@app.post("/demo/bootstrap")
+def bootstrap_demo() -> dict[str, Any]:
+    """Create or reuse the synthetic stakeholder demo workspace."""
+    storage = get_storage()
+    project, documents = seed_demo(storage)
+    run = storage.latest_run(project["id"])
+    if not run:
+        run = storage.create_run(project["id"], llm_provider="auto", source_ids=[document["id"] for document in documents])
+        for document in documents:
+            storage.add_run_document(run["id"], document["id"])
+        get_workflow().execute(run["id"])
+    return {"project": project, "documents": storage.list_documents(project["id"]), "run": _run_payload(run["id"])}
