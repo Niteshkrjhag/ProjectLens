@@ -10,7 +10,6 @@ from mcp.server.mcpserver import MCPServer
 from .analysis import answer_question
 from .api import _run_payload, get_storage, get_workflow, manager
 
-
 server = MCPServer(name="projectlens", version="0.1.0")
 
 
@@ -51,6 +50,16 @@ def start_run(project_id: str, mode: str = "initial", source_path: str = "", bac
 
 @server.tool(description="Read every stage, event, source, claim, conflict, finding, review item, and deliverable for a run.")
 def get_run(run_id: str) -> dict[str, Any]:
+    return _run_payload(run_id)
+
+
+@server.tool(description="Retry a failed run from its persisted failed stage.")
+def retry_run(run_id: str, background: bool = False) -> dict[str, Any]:
+    if background:
+        get_workflow().request_retry(run_id)
+        manager.submit(run_id)
+    else:
+        get_workflow().retry(run_id)
     return _run_payload(run_id)
 
 

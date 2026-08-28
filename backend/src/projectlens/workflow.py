@@ -31,6 +31,14 @@ class ProjectLensWorkflow:
 
     def __init__(self, storage: Storage | None = None) -> None:
         self.storage = storage or Storage()
+        self._checkpoint_context = None
+        self._checkpointer = None
+        if self.storage.backend == "postgres":
+            from langgraph.checkpoint.postgres import PostgresSaver
+
+            self._checkpoint_context = PostgresSaver.from_conn_string(self.storage.url)
+            self._checkpointer = self._checkpoint_context.__enter__()
+            self._checkpointer.setup()
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -41,7 +49,7 @@ class ProjectLensWorkflow:
         for current, following in pairwise(STAGES):
             graph.add_conditional_edges(current, self._next(following), {"continue": following, "halt": END})
         graph.add_edge(STAGES[-1], END)
-        return graph.compile()
+        return graph.compile(checkpointer=self._checkpointer)
 
     @staticmethod
     def _next(following: str):
@@ -71,7 +79,10 @@ class ProjectLensWorkflow:
         self.storage.update_run(run_id, status="running", error=None)
         self.storage.add_event(run_id, "run_started", "Workflow started or resumed", {"stop_after_stage": stop_after_stage})
         try:
-            self.graph.invoke({"run_id": run_id, "stop_after_stage": stop_after_stage, "halt": False})
+            self.graph.invoke(
+                {"run_id": run_id, "stop_after_stage": stop_after_stage, "halt": False},
+                config={"configurable": {"thread_id": run_id}},
+            )
         except Exception as exc:  # noqa: BLE001 - persist any worker failure for retry/recovery
             self.storage.update_run(run_id, status="failed", error=str(exc), duration_ms=int((time.perf_counter() - started) * 1000))
             self.storage.add_event(run_id, "run_failed", "Workflow failed", {"error": str(exc)})
@@ -85,8 +96,12 @@ class ProjectLensWorkflow:
         run = self.storage.get_run(run_id)
         if not run:
             raise KeyError(f"unknown run: {run_id}")
+        if run.get("stop_requested"):
+            self.storage.update_run(run_id, status="paused", current_stage=stage, stop_requested=0)
+            self.storage.add_event(run_id, "run_paused", f"Run paused before {stage}", {"stage": stage})
+            return {"run_id": run_id, "halt": True}
         existing = self.storage.get_stage(run_id, stage)
-        if stage != "human_gate" and existing and existing["status"] == "completed":
+        if stage != "human_gate" and existing and existing["status"] in {"completed", "skipped"}:
             return {"run_id": run_id, "halt": False}
         if stage == "human_gate" and existing and existing["status"] == "completed" and self.storage.pending_review_items(run_id):
             self.storage.update_run(run_id, status="awaiting_review", current_stage=stage)
@@ -105,6 +120,10 @@ class ProjectLensWorkflow:
         duration = int((time.perf_counter() - started) * 1000)
         self.storage.upsert_stage(run_id, stage, status="completed", attempt=attempt, completed_at=utc_now(), decision=decision, detail=detail, duration_ms=duration, cost_usd=0)
         self.storage.add_event(run_id, "stage_completed", f"Stage {stage} completed", {"decision": decision, "duration_ms": duration})
+        if decision.startswith("skip"):
+            self.storage.add_event(run_id, "stage_skipped", f"Stage {stage} skipped an optional path", {"decision": decision})
+        if decision == "escalate":
+            self.storage.add_event(run_id, "workflow_escalated", f"Stage {stage} escalated for human review", {"stage": stage})
         if stage == "human_gate" and detail.get("pending_count", 0):
             self.storage.update_run(run_id, status="awaiting_review", current_stage=stage)
             return {"run_id": run_id, "halt": True}
@@ -184,7 +203,7 @@ class ProjectLensWorkflow:
                     self.storage.add_event(run["id"], "model_fallback", "Live provider unavailable; deterministic extraction retained", {"provider": provider_name, "error": str(exc).splitlines()[0][:180]})
             claims.extend(document_claims)
         self.storage.replace_claims(run["id"], claims)
-        decision = "model_verified" if any(item.get("status") == "ok" for item in model_runs) else "deterministic"
+        decision = "model_verified" if any(item.get("status") == "ok" for item in model_runs) else "skip_model_verification"
         return {
             "document_count": len(documents),
             "claim_count": len(claims),
@@ -301,4 +320,18 @@ class ProjectLensWorkflow:
         failed = next((stage for stage in self.storage.list_stages(run_id) if stage["status"] == "failed"), None)
         if failed:
             self.storage.upsert_stage(run_id, failed["stage_name"], status="pending", decision="retry")
+            self.storage.update_run(run_id, status="queued", error=None)
+            self.storage.add_event(run_id, "retry_requested", f"Retry requested from failed stage {failed['stage_name']}", {"stage": failed["stage_name"]})
         return self.execute(run_id)
+
+    def request_retry(self, run_id: str) -> dict[str, Any]:
+        """Persist a retry decision before a background worker resumes the run."""
+        run = self.storage.get_run(run_id)
+        if not run:
+            raise KeyError(run_id)
+        failed = next((stage for stage in self.storage.list_stages(run_id) if stage["status"] == "failed"), None)
+        if failed:
+            self.storage.upsert_stage(run_id, failed["stage_name"], status="pending", decision="retry")
+            self.storage.update_run(run_id, status="queued", error=None)
+            self.storage.add_event(run_id, "retry_requested", f"Retry requested from failed stage {failed['stage_name']}", {"stage": failed["stage_name"]})
+        return self.storage.get_run(run_id)  # type: ignore[return-value]

@@ -221,6 +221,7 @@ def pause_run(run_id: str) -> dict[str, Any]:
 def retry_run(run_id: str) -> dict[str, Any]:
     if not get_storage().get_run(run_id):
         raise HTTPException(404, "run not found")
+    get_workflow().request_retry(run_id)
     manager.submit(run_id)
     return _run_payload(run_id)
 

@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-import sys
-
 sys.path.insert(0, str(Path(__file__).parents[3] / "backend" / "src"))
 
-from projectlens.analysis import answer_question  # noqa: E402
-from projectlens.mcp_server import server  # noqa: E402
-from projectlens.storage import Storage  # noqa: E402
-from projectlens.workflow import ProjectLensWorkflow  # noqa: E402
-
+from projectlens.analysis import answer_question
+from projectlens.mcp_server import server
+from projectlens.storage import Storage
+from projectlens.workflow import ProjectLensWorkflow
 
 FIXTURE_ROOT = Path(__file__).parents[3] / "testing dataset"
 
@@ -73,6 +71,60 @@ def test_interrupted_run_resumes_from_persisted_stage_boundary(tmp_path: Path) -
     assert stages["discover"]["attempt"] == 1
     assert stages["extract"]["attempt"] == 1
     assert stages["reconcile"]["status"] == "completed"
+
+
+def test_run_honors_pause_at_the_next_stage_boundary(tmp_path: Path) -> None:
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("Pause boundary test")
+    run = store.create_run(project["id"], source_path=str(FIXTURE_ROOT / "simple" / "general"))
+    store.update_run(run["id"], stop_requested=1)
+
+    workflow.execute(run["id"])
+
+    paused = store.get_run(run["id"])
+    assert paused["status"] == "paused"
+    assert store.list_stages(run["id"]) == []
+    assert any(event["event_type"] == "run_paused" for event in store.list_events(run["id"]))
+
+
+def test_offline_extraction_records_an_explicit_optional_skip(tmp_path: Path) -> None:
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("Optional verifier test")
+    run = store.create_run(project["id"], source_path=str(FIXTURE_ROOT / "simple" / "general"))
+
+    workflow.execute(run["id"], stop_after_stage="extract")
+
+    assert store.get_stage(run["id"], "extract")["decision"] == "skip_model_verification"
+    assert any(event["event_type"] == "stage_skipped" for event in store.list_events(run["id"]))
+
+
+def test_failed_stage_retry_is_persisted_and_restarts_from_that_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("Retry test")
+    run = store.create_run(project["id"], source_path=str(FIXTURE_ROOT / "simple" / "general"))
+    original = workflow._stage_extract
+    calls = 0
+
+    def fail_once(current_run: dict[str, object]):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("synthetic provider timeout")
+        return original(current_run)
+
+    monkeypatch.setattr(workflow, "_stage_extract", fail_once)
+    workflow.execute(run["id"])
+    assert store.get_run(run["id"])["status"] == "failed"
+
+    workflow.retry(run["id"])
+
+    assert store.get_run(run["id"])["status"] == "awaiting_review"
+    assert store.get_stage(run["id"], "extract")["attempt"] == 2
+    assert store.get_stage(run["id"], "extract")["decision"] == "skip_model_verification"
+    assert any(event["event_type"] == "retry_requested" for event in store.list_events(run["id"]))
 
 
 def test_two_runs_can_process_same_project_without_corrupting_state(tmp_path: Path) -> None:
@@ -191,13 +243,13 @@ def test_fastapi_ask_answers_uncommitted_source_question(tmp_path: Path, monkeyp
         with TestClient(app) as client:
             project = client.post("/projects", json={"name": "HTTP source question"}).json()
             content = (
-                "# Leadership checkpoint\n\n"
-                "Document type: Meeting Notes\n"
-                "Owner: Lena Ortiz\n"
-                "Workstream: Atlas migration\n"
-                "Decision date: 2026-08-28\n\n"
-                "Leadership asked for a concise readiness brief and visible conflicts.\n"
-            ).encode()
+                b"# Leadership checkpoint\n\n"
+                b"Document type: Meeting Notes\n"
+                b"Owner: Lena Ortiz\n"
+                b"Workstream: Atlas migration\n"
+                b"Decision date: 2026-08-28\n\n"
+                b"Leadership asked for a concise readiness brief and visible conflicts.\n"
+            )
             document = client.post(
                 f"/projects/{project['id']}/documents",
                 files={"file": ("leadership-notes.md", content, "text/markdown")},
@@ -226,7 +278,7 @@ def test_mcp_registers_machine_drivable_tools() -> None:
         return [tool.name for tool in await server.list_tools()]
 
     assert asyncio.run(names()) == [
-        "create_project", "ingest_document", "start_run", "get_run", "approve_review_item", "reject_review_item", "ask"
+        "create_project", "ingest_document", "start_run", "get_run", "retry_run", "approve_review_item", "reject_review_item", "ask"
     ]
 
 
