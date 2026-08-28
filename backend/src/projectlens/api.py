@@ -18,6 +18,7 @@ from .config import get_settings
 from .demo import seed_demo
 from .document_policy import DocumentCategory
 from .document_processing import parse_bytes
+from .embeddings import embed_text
 from .storage import Storage
 from .workflow import ProjectLensWorkflow
 
@@ -258,11 +259,15 @@ def ask_project(project_id: str, request: QuestionRequest) -> dict[str, Any]:
     deliverable = storage.latest_deliverable(project_id)
     latest_run = storage.latest_run(project_id)
     claims = storage.list_claims(latest_run["id"]) if latest_run else []
+    settings = get_settings()
+    query_embedding = embed_text(request.question, settings)
+    retrieved_chunks = storage.search_chunks(project_id, query_embedding.values)
     return answer_question(
         request.question,
         deliverable.get("content") if deliverable else None,
         documents=storage.list_documents(project_id),
         claims=claims,
+        retrieved_chunks=retrieved_chunks,
     )
 
 

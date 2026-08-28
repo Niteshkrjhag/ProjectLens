@@ -185,6 +185,18 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding ON document_chunks USING hnsw (embedding extensions.vector_cosine_ops);
 """
 
+SQLITE_CHUNK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding_json TEXT NOT NULL,
+    UNIQUE(document_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_document ON document_chunks(document_id, chunk_index);
+"""
+
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
@@ -196,6 +208,11 @@ def new_id(prefix: str) -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _vector_literal(values: list[float]) -> str:
+    """Serialize a vector in pgvector's accepted text format."""
+    return "[" + ",".join(format(float(value), ".9g") for value in values) + "]"
 
 
 def decode_json(value: str | None, default: Any) -> Any:
@@ -306,6 +323,7 @@ class Storage:
             if self.backend == "sqlite":
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(SCHEMA)
+                connection.executescript(SQLITE_CHUNK_SCHEMA)
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
                 if "llm_provider" not in columns:
                     connection.execute("ALTER TABLE runs ADD COLUMN llm_provider TEXT NOT NULL DEFAULT 'auto'")
@@ -396,6 +414,57 @@ class Storage:
         for row in rows:
             row["metadata"] = decode_json(row.pop("metadata_json", None), {})
         return rows
+
+    def replace_document_chunks(self, document_id: str, chunks: list[dict[str, Any]]) -> None:
+        """Persist retrieval chunks and their embeddings for one source."""
+        with self.connection() as connection:
+            connection.execute("DELETE FROM document_chunks WHERE document_id=?", (document_id,))
+            for chunk in chunks:
+                embedding = chunk["embedding"]
+                if self.backend == "postgres":
+                    connection.execute(
+                        """INSERT INTO document_chunks(id,document_id,chunk_index,content,embedding)
+                        VALUES (?,?,?,? ,?::extensions.vector)""",
+                        (chunk.get("id", new_id("chk")), document_id, chunk["chunk_index"], chunk["content"], _vector_literal(embedding)),
+                    )
+                else:
+                    connection.execute(
+                        """INSERT INTO document_chunks(id,document_id,chunk_index,content,embedding_json)
+                        VALUES (?,?,?,?,?)""",
+                        (chunk.get("id", new_id("chk")), document_id, chunk["chunk_index"], chunk["content"], _json(embedding)),
+                    )
+
+    def search_chunks(self, project_id: str, embedding: list[float], *, limit: int = 6) -> list[dict[str, Any]]:
+        """Return the nearest source chunks using pgvector or local cosine search."""
+        if limit < 1:
+            return []
+        if self.backend == "postgres":
+            with self.connection() as connection:
+                rows = [dict(row) for row in connection.execute(
+                    """SELECT c.id, c.document_id, d.filename, d.relative_path, c.chunk_index, c.content,
+                    c.embedding <=> ?::extensions.vector AS distance
+                    FROM document_chunks c JOIN documents d ON d.id=c.document_id
+                    WHERE d.project_id=? AND c.embedding IS NOT NULL
+                    ORDER BY c.embedding <=> ?::extensions.vector LIMIT ?""",
+                    (_vector_literal(embedding), project_id, _vector_literal(embedding), limit),
+                )]
+            return rows
+
+        import math
+
+        def cosine(left: list[float], right: list[float]) -> float:
+            denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
+            return sum(a * b for a, b in zip(left, right, strict=False)) / denominator if denominator else 0.0
+
+        with self.connection() as connection:
+            rows = [dict(row) for row in connection.execute(
+                """SELECT c.id, c.document_id, d.filename, d.relative_path, c.chunk_index, c.content, c.embedding_json
+                FROM document_chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=?""", (project_id,)
+            )]
+        for row in rows:
+            row["similarity"] = cosine(embedding, decode_json(row.pop("embedding_json"), []))
+            row["distance"] = 1.0 - row["similarity"]
+        return sorted(rows, key=lambda row: row["distance"])[:limit]
 
     def create_run(
         self,

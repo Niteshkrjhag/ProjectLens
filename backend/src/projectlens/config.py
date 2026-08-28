@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: SecretStr | None = None
     gemini_model: str = "gemini-3.5-flash"
+    gemini_embedding_model: str = "gemini-embedding-001"
     ollama_api_key: SecretStr | None = None
     ollama_host: str = "https://ollama.com"
     ollama_model: str = "gpt-oss:120b"

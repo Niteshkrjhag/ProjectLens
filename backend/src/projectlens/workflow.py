@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from .analysis import build_deliverable, examine, extract_claims, reconcile
 from .config import get_settings
 from .document_processing import discover_files, parse_file
+from .embeddings import chunk_text, embed_text
 from .model_providers import extraction_prompt, provider_for
 from .storage import Storage, utc_now
 
@@ -156,6 +157,8 @@ class ProjectLensWorkflow:
         documents = self.storage.list_run_documents(run["id"])
         claims: list[dict[str, Any]] = []
         model_runs: list[dict[str, Any]] = []
+        embedding_count = 0
+        embedding_providers: set[str] = set()
         settings = get_settings()
         provider_name = str(run.get("llm_provider") or settings.projectlens_llm_provider).lower().strip()
         if provider_name == "auto":
@@ -163,6 +166,13 @@ class ProjectLensWorkflow:
         provider = provider_for(provider_name, settings) if settings.projectlens_llm_mode.lower() == "live" else None
         for document in documents:
             document_claims = extract_claims(document)
+            chunks = []
+            for index, content in enumerate(chunk_text(document["content"]), start=0):
+                embedding = embed_text(content, settings)
+                embedding_providers.add(embedding.provider)
+                chunks.append({"chunk_index": index, "content": content, "embedding": embedding.values})
+            self.storage.replace_document_chunks(document["id"], chunks)
+            embedding_count += len(chunks)
             if provider:
                 try:
                     response = provider.generate(extraction_prompt(document["content"], document["filename"]))
@@ -175,7 +185,13 @@ class ProjectLensWorkflow:
             claims.extend(document_claims)
         self.storage.replace_claims(run["id"], claims)
         decision = "model_verified" if any(item.get("status") == "ok" for item in model_runs) else "deterministic"
-        return {"document_count": len(documents), "claim_count": len(claims), "model_runs": model_runs}, decision
+        return {
+            "document_count": len(documents),
+            "claim_count": len(claims),
+            "model_runs": model_runs,
+            "embedding_count": embedding_count,
+            "embedding_providers": sorted(embedding_providers),
+        }, decision
 
     def _effective_inputs(self, run: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         documents = self.storage.list_run_documents(run["id"])
