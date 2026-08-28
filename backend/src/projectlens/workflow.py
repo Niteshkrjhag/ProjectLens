@@ -124,6 +124,10 @@ class ProjectLensWorkflow:
             self.storage.add_event(run_id, "stage_skipped", f"Stage {stage} skipped an optional path", {"decision": decision})
         if decision == "escalate":
             self.storage.add_event(run_id, "workflow_escalated", f"Stage {stage} escalated for human review", {"stage": stage})
+        if decision == "skip_no_new_sources":
+            self.storage.update_run(run_id, status="no_change", current_stage=stage, completed_at=utc_now())
+            self.storage.add_event(run_id, "run_no_change", "Incremental scan found no new or changed sources", {})
+            return {"run_id": run_id, "halt": True}
         if stage == "human_gate" and detail.get("pending_count", 0):
             self.storage.update_run(run_id, status="awaiting_review", current_stage=stage)
             return {"run_id": run_id, "halt": True}
@@ -138,6 +142,12 @@ class ProjectLensWorkflow:
         if not project:
             raise ValueError("project no longer exists")
         attached = {doc["id"] for doc in self.storage.list_run_documents(run["id"])}
+        existing_by_path = {
+            document["relative_path"]: document
+            for document in self.storage.list_documents(run["project_id"])
+        }
+        added_document_ids: list[str] = []
+        changed_source_paths: list[str] = []
         if run.get("source_path"):
             root = Path(run["source_path"]).expanduser().resolve()
             for path in discover_files(root):
@@ -157,6 +167,10 @@ class ProjectLensWorkflow:
                 if document["id"] not in attached and (run["mode"] == "initial" or existing is None):
                     self.storage.add_run_document(run["id"], document["id"])
                     attached.add(document["id"])
+                    added_document_ids.append(document["id"])
+                    previous = existing_by_path.get(document["relative_path"])
+                    if previous and previous["sha256"] != document["sha256"]:
+                        changed_source_paths.append(document["relative_path"])
         for source_id in run.get("source_ids", []):
             if self.storage.get_document(source_id) and source_id not in attached:
                 self.storage.add_run_document(run["id"], source_id)
@@ -166,11 +180,21 @@ class ProjectLensWorkflow:
                 self.storage.add_run_document(run["id"], document["id"])
                 attached.add(document["id"])
         if not attached and run["mode"] == "incremental":
-            return {"document_count": 0, "source_path": run.get("source_path", "")}, "skip_no_new_sources"
+            return {
+                "document_count": 0,
+                "source_path": run.get("source_path", ""),
+                "added_document_ids": [],
+                "changed_source_paths": [],
+            }, "skip_no_new_sources"
         if not attached:
             raise ValueError("no supported documents were found for this run")
         self.storage.update_run(run["id"], source_ids=sorted(attached))
-        return {"document_count": len(attached), "source_path": run.get("source_path", "")}, "continue"
+        return {
+            "document_count": len(attached),
+            "source_path": run.get("source_path", ""),
+            "added_document_ids": added_document_ids,
+            "changed_source_paths": changed_source_paths,
+        }, "continue"
 
     def _stage_extract(self, run: dict[str, Any]) -> tuple[dict[str, Any], str]:
         documents = self.storage.list_run_documents(run["id"])
@@ -287,7 +311,18 @@ class ProjectLensWorkflow:
             if finding["id"] not in rejected_findings
             for decision in decisions if decision["item_type"] == "finding" and decision["item_id"] == finding["id"]
         ]
+        approved_conflicts = {item["item_id"] for item in decisions if item["item_type"] == "conflict" and item["status"] == "approved"}
         rejected_conflicts = {item["item_id"] for item in decisions if item["item_type"] == "conflict" and item["status"] == "rejected"}
+        for conflict in self.storage.list_conflicts(run["id"]):
+            if conflict["id"] not in approved_conflicts:
+                continue
+            section = content.get("sections", {}).get(conflict["claim_key"])
+            if not section or not conflict.get("preferred_claim_id"):
+                continue
+            section["entries"] = [
+                entry for entry in section.get("entries", [])
+                if entry.get("claim_id") == conflict["preferred_claim_id"]
+            ]
         content["open_questions"] = [
             item["description"] for item in self.storage.list_conflicts(run["id"]) if item["id"] in rejected_conflicts
         ]

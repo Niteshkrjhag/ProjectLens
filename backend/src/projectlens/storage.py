@@ -383,7 +383,7 @@ class Storage:
                     document.get("size_bytes", len(document["content"].encode())),
                     document["category"],
                     int(document.get("authoritative", False)),
-                    document.get("updated_at", utc_now()),
+                    document.get("updated_at") or utc_now(),
                     _json(document.get("metadata", {})),
                 ),
             )
@@ -584,7 +584,7 @@ class Storage:
                     (id,run_id,document_id,claim_key,label,value,confidence,line_start,line_end,evidence_text,metadata_json)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        claim.get("id", new_id("clm")), run_id, claim["document_id"], claim["claim_key"], claim["label"],
+                        claim.setdefault("id", new_id("clm")), run_id, claim["document_id"], claim["claim_key"], claim["label"],
                         claim["value"], claim.get("confidence", 1), claim["line_start"], claim["line_end"],
                         claim["evidence_text"], _json(claim.get("metadata", {})),
                     ),

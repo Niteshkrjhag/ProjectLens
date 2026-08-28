@@ -188,6 +188,63 @@ def test_incremental_run_preserves_unaffected_sections_byte_for_byte(tmp_path: P
     assert store.get_run(incremental["id"])["status"] == "committed"
 
 
+def test_incremental_changed_source_is_reported_and_approved_conflict_selects_new_claim(tmp_path: Path) -> None:
+    source_root = tmp_path / "watch"
+    source_root.mkdir()
+    source = source_root / "requirements.md"
+    source.write_text(
+        "# Atlas\nDocument type: Requirements / PRD\nOwner: Maya Chen\nDelivery window: 2026-09-07\n",
+        encoding="utf-8",
+    )
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("Changed source test")
+    initial = store.create_run(project["id"], source_path=str(source_root))
+    workflow.execute(initial["id"])
+    _approve_all(store, workflow, initial["id"])
+
+    source.write_text(
+        "# Atlas\nDocument type: Requirements / PRD\nOwner: Priya Nair\nDelivery window: 2026-09-07\n",
+        encoding="utf-8",
+    )
+    incremental = store.create_run(project["id"], mode="incremental", source_path=str(source_root), base_run_id=initial["id"])
+    workflow.execute(incremental["id"])
+
+    discovery = store.get_stage(incremental["id"], "discover")
+    assert "requirements.md" in discovery["detail"]["changed_source_paths"]
+    conflict = next(item for item in store.list_review_items(incremental["id"]) if item["item_type"] == "conflict" and "owner" in item["title"])
+    _approve_all(store, workflow, incremental["id"])
+
+    assert store.get_run(incremental["id"])["status"] == "committed"
+    owner_entries = store.get_deliverable(incremental["id"])["content"]["sections"]["owner"]["entries"]
+    assert [entry["value"] for entry in owner_entries] == ["Priya Nair"]
+    assert conflict["payload"]["preferred_claim_id"]
+
+
+def test_incremental_scan_with_no_changes_is_a_durable_no_op(tmp_path: Path) -> None:
+    source_root = tmp_path / "watch"
+    source_root.mkdir()
+    (source_root / "status.md").write_text(
+        "# Atlas status\nDocument type: Sprint / Project Status Report\nCompletion: 68%\n",
+        encoding="utf-8",
+    )
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("No-op scan test")
+    initial = store.create_run(project["id"], source_path=str(source_root))
+    workflow.execute(initial["id"])
+    _approve_all(store, workflow, initial["id"])
+    before = store.get_deliverable(initial["id"])
+
+    no_op = store.create_run(project["id"], mode="incremental", source_path=str(source_root), base_run_id=initial["id"])
+    workflow.execute(no_op["id"])
+
+    assert store.get_run(no_op["id"])["status"] == "no_change"
+    assert [stage["stage_name"] for stage in store.list_stages(no_op["id"])] == ["discover"]
+    assert store.get_deliverable(initial["id"])["content_hash"] == before["content_hash"]
+    assert any(event["event_type"] == "run_no_change" for event in store.list_events(no_op["id"]))
+
+
 def test_grounded_answer_refuses_unsupported_claim(tmp_path: Path) -> None:
     store = _storage(tmp_path)
     workflow = ProjectLensWorkflow(store)

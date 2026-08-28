@@ -189,6 +189,7 @@ def build_deliverable(
         for claim in candidates:
             doc = document_by_id[claim["document_id"]]
             entries.append({
+                "claim_id": claim.get("id"),
                 "value": claim["value"],
                 "source_id": claim["document_id"],
                 "source": doc["relative_path"],
@@ -279,7 +280,12 @@ def _citation(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _answer_from_deliverable(question: str, deliverable: dict[str, Any] | None) -> dict[str, Any]:
+def _answer_from_deliverable(
+    question: str,
+    deliverable: dict[str, Any] | None,
+    *,
+    preferred_document_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """Find a grounded answer in a report, without resolving conflicts silently."""
     if not deliverable:
         return {"answer": "I do not have a committed deliverable to answer from.", "citations": [], "grounded": False}
@@ -293,7 +299,8 @@ def _answer_from_deliverable(question: str, deliverable: dict[str, Any] | None) 
             score = len(tokens & entry_tokens)
             label_score = len(tokens & label_tokens)
             if score and (label_score or score >= 2):
-                matches.append((score, key, entry))
+                retrieval_bonus = 1 if entry.get("source_id") in (preferred_document_ids or set()) else 0
+                matches.append((score + retrieval_bonus, key, entry))
     if not matches:
         return {"answer": "I cannot find support for that in the committed sources.", "citations": [], "grounded": False}
     matches.sort(key=lambda item: item[0], reverse=True)
@@ -366,6 +373,7 @@ def answer_question(
     *,
     documents: list[dict[str, Any]] | None = None,
     claims: list[dict[str, Any]] | None = None,
+    retrieved_chunks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Answer from committed work first, then from current source evidence.
 
@@ -375,6 +383,7 @@ def answer_question(
     """
     source_documents = documents or []
     source_claims = list(claims or [])
+    retrieved_document_ids = {chunk.get("document_id") for chunk in (retrieved_chunks or []) if chunk.get("document_id")}
     if source_documents:
         document_answer = _answer_from_document(question, source_documents, source_claims)
         if document_answer:
@@ -385,10 +394,13 @@ def answer_question(
             if document.get("id") not in known_document_ids:
                 source_claims.extend(extract_claims(document))
         source_deliverable = build_deliverable(source_claims, source_documents, reconcile(source_claims, source_documents)) if source_claims else None
-        source_answer = _answer_from_deliverable(question, source_deliverable)
+        source_answer = _answer_from_deliverable(question, source_deliverable, preferred_document_ids=retrieved_document_ids)
         if source_answer["grounded"]:
             source_answer["answer"] = f"Source-grounded preview (not yet committed): {source_answer['answer']}"
             source_answer["source_preview"] = True
+            source_answer["retrieved_sources"] = sorted(
+                {chunk.get("relative_path", "") for chunk in (retrieved_chunks or []) if chunk.get("relative_path")}
+            )
             return source_answer
 
-    return _answer_from_deliverable(question, deliverable)
+    return _answer_from_deliverable(question, deliverable, preferred_document_ids=retrieved_document_ids)
