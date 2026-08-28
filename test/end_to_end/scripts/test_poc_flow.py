@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -71,6 +74,63 @@ def test_interrupted_run_resumes_from_persisted_stage_boundary(tmp_path: Path) -
     assert stages["discover"]["attempt"] == 1
     assert stages["extract"]["attempt"] == 1
     assert stages["reconcile"]["status"] == "completed"
+
+
+def test_worker_process_kill_is_recovered_from_persisted_stage(tmp_path: Path) -> None:
+    store = _storage(tmp_path)
+    project = store.create_project("Process recovery test")
+    source_path = FIXTURE_ROOT / "simple" / "general"
+    run = store.create_run(project["id"], source_path=str(source_path))
+    package_root = Path(__file__).parents[3]
+    child_script = """
+import sys
+import time
+from projectlens.storage import Storage
+from projectlens.workflow import ProjectLensWorkflow
+
+store = Storage(url=sys.argv[1])
+workflow = ProjectLensWorkflow(store)
+original = workflow._stage_extract
+
+def slow_extract(run):
+    time.sleep(5)
+    return original(run)
+
+workflow._stage_extract = slow_extract
+workflow.execute(sys.argv[2])
+"""
+    database_url = f"sqlite:///{tmp_path / 'state' / 'projectlens.db'}"
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_script, database_url, run["id"]],
+        cwd=package_root,
+        env={**os.environ, "PYTHONPATH": str(package_root / "backend" / "src")},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            stage = store.get_stage(run["id"], "extract")
+            if stage and stage["status"] == "running":
+                child.kill()
+                child.wait(timeout=3)
+                break
+            time.sleep(0.05)
+        else:
+            child.kill()
+            child.wait(timeout=3)
+            pytest.fail("worker did not reach the persisted extract boundary")
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+
+    assert store.recover_incomplete_runs() == [run["id"]]
+    recovered = ProjectLensWorkflow(store).execute(run["id"])
+    assert recovered["status"] == "awaiting_review"
+    stages = {stage["stage_name"]: stage for stage in store.list_stages(run["id"])}
+    assert stages["discover"]["attempt"] == 1
+    assert stages["extract"]["attempt"] == 2
 
 
 def test_run_honors_pause_at_the_next_stage_boundary(tmp_path: Path) -> None:

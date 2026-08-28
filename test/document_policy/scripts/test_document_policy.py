@@ -5,12 +5,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[3] / "backend" / "src"))
 
-from projectlens.document_policy import (  # noqa: E402
+from projectlens.document_policy import (
     DocumentCategory,
     DocumentSource,
     classify_document,
-    preferred_source,
     precedence_for,
+    preferred_source,
 )
 
 

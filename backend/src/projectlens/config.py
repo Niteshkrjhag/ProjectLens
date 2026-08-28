@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     gemini_output_cost_per_million: float = 0.0
     ollama_api_key: SecretStr | None = None
     ollama_host: str = "https://ollama.com"
-    ollama_model: str = "gpt-oss:120b"
+    ollama_model: str = "gpt-oss:120b-cloud"
     projectlens_llm_mode: str = "offline"
     projectlens_llm_provider: str = "auto"
 

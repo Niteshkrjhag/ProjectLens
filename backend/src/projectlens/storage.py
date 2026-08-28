@@ -3,8 +3,8 @@
 The POC uses SQLite by default so a fresh clone can exercise the entire flow
 without a database account.  The same repository contract also accepts a
 Supabase/PostgreSQL URL and provisions the relational schema plus a pgvector
-chunk table.  Retrieval remains deterministic lexical matching in this POC so
-offline tests do not require embedding spend.
+chunk table. Retrieval uses provider embeddings when live mode is enabled and a
+stable local hash embedding for offline tests.
 """
 
 from __future__ import annotations

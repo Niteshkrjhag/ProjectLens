@@ -16,7 +16,6 @@ from typing import Any
 
 from .document_policy import DocumentCategory, DocumentSource, preferred_source
 
-
 FIELD_ALIASES = {
     "owner": "owner",
     "delivery owner": "owner",

@@ -5,10 +5,10 @@ precedence may constrain or contradict lower-precedence sources, but lower-
 precedence sources must never silently override them.
 """
 
-from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
 import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
 
 
 class DocumentCategory(StrEnum):
@@ -110,7 +110,7 @@ def rank_source(source: DocumentSource) -> tuple[int, int, datetime]:
     return (
         precedence_for(source.category),
         int(source.authoritative),
-        source.updated_at or datetime.min,
+        source.updated_at or datetime.min.replace(tzinfo=UTC),
     )
 
 

@@ -15,7 +15,6 @@ from docx import Document as DocxDocument
 
 from .document_policy import DocumentCategory, classify_document
 
-
 SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf", ".docx", ".rtf", ".html", ".htm"}
 
 

@@ -110,7 +110,7 @@ class OllamaCloudProvider(ModelProvider):
 def provider_for(name: str, settings: Settings) -> ModelProvider:
     if name in {"gemini", "gemini-3.5-flash"}:
         return GeminiProvider(settings)
-    if name in {"ollama", "ollama_cloud", "gpt-oss:120b"}:
+    if name in {"ollama", "ollama_cloud", "gpt-oss:120b", "gpt-oss:120b-cloud"}:
         return OllamaCloudProvider(settings)
     raise ValueError(f"unknown model provider: {name}")
 
