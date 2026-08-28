@@ -118,8 +118,12 @@ class ProjectLensWorkflow:
             self.storage.add_event(run_id, "stage_failed", f"Stage {stage} failed; retry is available", {"error": str(exc)})
             raise
         duration = int((time.perf_counter() - started) * 1000)
-        self.storage.upsert_stage(run_id, stage, status="completed", attempt=attempt, completed_at=utc_now(), decision=decision, detail=detail, duration_ms=duration, cost_usd=0)
-        self.storage.add_event(run_id, "stage_completed", f"Stage {stage} completed", {"decision": decision, "duration_ms": duration})
+        stage_cost = float(detail.get("cost_usd", 0) or 0)
+        detail.setdefault("cost_usd", stage_cost)
+        detail.setdefault("cost_basis", "deterministic_local")
+        self.storage.upsert_stage(run_id, stage, status="completed", attempt=attempt, completed_at=utc_now(), decision=decision, detail=detail, duration_ms=duration, cost_usd=stage_cost)
+        self.storage.add_run_cost(run_id, stage_cost)
+        self.storage.add_event(run_id, "stage_completed", f"Stage {stage} completed", {"decision": decision, "duration_ms": duration, "cost_usd": stage_cost, "cost_basis": detail["cost_basis"]})
         if decision.startswith("skip"):
             self.storage.add_event(run_id, "stage_skipped", f"Stage {stage} skipped an optional path", {"decision": decision})
         if decision == "escalate":
@@ -219,7 +223,7 @@ class ProjectLensWorkflow:
             if provider:
                 try:
                     response = provider.generate(extraction_prompt(document["content"], document["filename"]))
-                    model_runs.append({"provider": response.provider, "model": response.model, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens, "output_chars": len(response.text), "status": "ok"})
+                    model_runs.append({"provider": response.provider, "model": response.model, "latency_ms": response.latency_ms, "input_tokens": response.input_tokens, "output_tokens": response.output_tokens, "output_chars": len(response.text), "cost_usd": response.cost_usd, "cost_basis": response.cost_basis, "status": "ok"})
                     for claim in document_claims:
                         claim.setdefault("metadata", {}).update({"model_verifier": response.provider, "model_verified": True})
                 except Exception as exc:  # noqa: BLE001 - provider failure must preserve deterministic extraction
@@ -228,12 +232,16 @@ class ProjectLensWorkflow:
             claims.extend(document_claims)
         self.storage.replace_claims(run["id"], claims)
         decision = "model_verified" if any(item.get("status") == "ok" for item in model_runs) else "skip_model_verification"
+        model_cost = sum(float(item.get("cost_usd", 0) or 0) for item in model_runs)
+        cost_bases = {str(item.get("cost_basis")) for item in model_runs if item.get("cost_basis")}
         return {
             "document_count": len(documents),
             "claim_count": len(claims),
             "model_runs": model_runs,
             "embedding_count": embedding_count,
             "embedding_providers": sorted(embedding_providers),
+            "cost_usd": model_cost,
+            "cost_basis": ", ".join(sorted(cost_bases)) if cost_bases else "deterministic_local",
         }, decision
 
     def _effective_inputs(self, run: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

@@ -100,6 +100,28 @@ def test_offline_extraction_records_an_explicit_optional_skip(tmp_path: Path) ->
     assert any(event["event_type"] == "stage_skipped" for event in store.list_events(run["id"]))
 
 
+def test_offline_run_reports_truthful_stage_timing_and_zero_cost(tmp_path: Path) -> None:
+    store = _storage(tmp_path)
+    workflow = ProjectLensWorkflow(store)
+    project = store.create_project("Telemetry test")
+    run = store.create_run(project["id"], source_path=str(FIXTURE_ROOT / "simple" / "general"))
+
+    workflow.execute(run["id"])
+
+    completed = store.list_stages(run["id"])
+    persisted = store.get_run(run["id"])
+    assert completed
+    assert all(stage["duration_ms"] >= 0 for stage in completed)
+    assert all(stage["cost_usd"] == 0 for stage in completed)
+    assert all(stage["detail"].get("cost_basis") == "deterministic_local" for stage in completed)
+    assert persisted["duration_ms"] >= 0
+    assert persisted["cost_usd"] == sum(stage["cost_usd"] for stage in completed)
+
+    stage_events = [event for event in store.list_events(run["id"]) if event["event_type"] == "stage_completed"]
+    assert stage_events
+    assert all("duration_ms" in event["payload"] and "cost_usd" in event["payload"] for event in stage_events)
+
+
 def test_failed_stage_retry_is_persisted_and_restarts_from_that_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = _storage(tmp_path)
     workflow = ProjectLensWorkflow(store)

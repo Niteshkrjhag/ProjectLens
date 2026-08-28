@@ -25,6 +25,8 @@ class ModelResponse:
     latency_ms: int
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cost_usd: float = 0.0
+    cost_basis: str = "provider_unreported"
 
 
 class ModelProvider:
@@ -39,6 +41,7 @@ class GeminiProvider(ModelProvider):
     provider = "gemini"
 
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.model = settings.gemini_model
         key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
         if not key:
@@ -56,13 +59,18 @@ class GeminiProvider(ModelProvider):
             ),
         )
         usage = getattr(response, "usage_metadata", None)
+        input_tokens = getattr(usage, "prompt_token_count", None)
+        output_tokens = getattr(usage, "candidates_token_count", None)
+        cost_usd = ((input_tokens or 0) / 1_000_000 * self.settings.gemini_input_cost_per_million) + ((output_tokens or 0) / 1_000_000 * self.settings.gemini_output_cost_per_million)
         return ModelResponse(
             provider=self.provider,
             model=self.model,
             text=(getattr(response, "text", "") or "").strip(),
             latency_ms=int((time.perf_counter() - started) * 1000),
-            input_tokens=getattr(usage, "prompt_token_count", None),
-            output_tokens=getattr(usage, "candidates_token_count", None),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            cost_basis="configured_rates",
         )
 
 
@@ -86,11 +94,16 @@ class OllamaCloudProvider(ModelProvider):
         )
         message = getattr(response, "message", None)
         text = (getattr(message, "content", "") if message else "") or ""
+        input_tokens = getattr(response, "prompt_eval_count", None)
+        output_tokens = getattr(response, "eval_count", None)
         return ModelResponse(
             provider=self.provider,
             model=self.model,
             text=text.strip(),
             latency_ms=int((time.perf_counter() - started) * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_basis="provider_unreported",
         )
 
 

@@ -508,6 +508,12 @@ class Storage:
             connection.execute(f"UPDATE runs SET {clause} WHERE id=?", [v for _, v in updates] + [run_id])
         return self.get_run(run_id)
 
+    def add_run_cost(self, run_id: str, amount: float) -> dict[str, Any] | None:
+        """Atomically accumulate observed or configured-estimate spend."""
+        with self.connection() as connection:
+            connection.execute("UPDATE runs SET cost_usd=COALESCE(cost_usd,0)+?,updated_at=? WHERE id=?", (amount, utc_now(), run_id))
+        return self.get_run(run_id)
+
     def add_run_document(self, run_id: str, document_id: str) -> None:
         with self.connection() as connection:
             connection.execute("INSERT OR IGNORE INTO run_documents(run_id,document_id) VALUES (?,?)", (run_id, document_id))
