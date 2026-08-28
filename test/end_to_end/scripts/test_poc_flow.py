@@ -357,8 +357,51 @@ def test_mcp_registers_machine_drivable_tools() -> None:
         return [tool.name for tool in await server.list_tools()]
 
     assert asyncio.run(names()) == [
-        "create_project", "ingest_document", "start_run", "get_run", "retry_run", "approve_review_item", "reject_review_item", "ask"
+        "create_project", "list_projects", "list_documents", "ingest_document", "start_run", "get_run", "resume_run", "pause_run", "retry_run", "scan_watch_folder", "get_deliverable", "bootstrap_demo", "approve_review_item", "reject_review_item", "ask"
     ]
+
+
+def test_mcp_can_drive_ingest_run_gate_incremental_scan_and_question(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROJECTLENS_STORAGE_URL", f"sqlite:///{tmp_path / 'mcp.db'}")
+    from projectlens import mcp_server
+    from projectlens.api import get_storage, get_workflow
+
+    get_workflow.cache_clear()
+    get_storage.cache_clear()
+    source_root = tmp_path / "watch"
+    source_root.mkdir()
+    source = source_root / "requirements.md"
+    source.write_text(
+        "# Atlas\nDocument type: Requirements / PRD\nOwner: Maya Chen\nDelivery window: 2026-09-07\nExpected measure: under 90 seconds\n",
+        encoding="utf-8",
+    )
+    try:
+        project = mcp_server.create_project("MCP lifecycle")
+        assert mcp_server.list_projects()[0]["id"] == project["id"]
+        document = mcp_server.ingest_document(project["id"], str(source), "requirements_prd")
+        assert mcp_server.list_documents(project["id"])[0]["id"] == document["id"]
+
+        run = mcp_server.start_run(project["id"], source_ids=[document["id"]])
+        assert run["status"] == "awaiting_review"
+        for item in list(run["review_items"]):
+            run = mcp_server.approve_review_item(run["id"], item["id"], decided_by="machine-test")
+        assert run["status"] == "committed"
+        assert mcp_server.get_deliverable(project["id"])["status"] == "committed"
+        answer = mcp_server.ask(project["id"], "What is the expected measure?")
+        assert answer["grounded"] is True
+        assert answer["citations"]
+
+        source.write_text(
+            "# Atlas\nDocument type: Requirements / PRD\nOwner: Priya Nair\nDelivery window: 2026-09-07\nExpected measure: under 90 seconds\n",
+            encoding="utf-8",
+        )
+        incremental = mcp_server.scan_watch_folder(project["id"], str(source_root))
+        assert incremental["status"] == "awaiting_review"
+        assert any(item["item_type"] == "conflict" for item in incremental["review_items"])
+        assert mcp_server.get_run(incremental["id"])["id"] == incremental["id"]
+    finally:
+        get_workflow.cache_clear()
+        get_storage.cache_clear()
 
 
 def test_fastapi_can_drive_upload_run_gate_and_grounded_question(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
